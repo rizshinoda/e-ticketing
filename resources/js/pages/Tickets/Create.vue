@@ -253,7 +253,7 @@ const submit = () => {
             <h1 class="text-2xl font-semibold">Buat Ticket</h1>
 
             <p class="text-sm text-muted-foreground">
-                Buat ticket gangguan baru.
+                Buat ticket gangguan baru,
             </p>
         </div>
 
