@@ -9,52 +9,64 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('sla_rules', function (Blueprint $table) {
+
             $table->id();
 
             /*
-             * Pelanggan pemilik SLA.
-             */
+     * Pelanggan pemilik SLA.
+     */
             $table->foreignId('pelanggan_id')
                 ->constrained('pelanggans')
                 ->restrictOnDelete();
 
             /*
-             * NULL:
-             * SLA default pelanggan.
-             *
-             * Terisi:
-             * SLA khusus site/layanan Online Billing.
-             */
+     * Jenis SLA:
+     *
+     * global = SLA keseluruhan pelanggan
+     * site   = SLA khusus site/layanan
+     */
+            $table->enum('scope', [
+                'global',
+                'site',
+            ])->default('site');
+
+            /*
+     * Site/layanan Online Billing.
+     *
+     * GLOBAL:
+     * NULL
+     *
+     * SITE:
+     * terisi
+     */
             $table->foreignId('online_billing_id')
                 ->nullable()
                 ->constrained('online_billings')
                 ->nullOnDelete();
 
             /*
-             * Persentase SLA.
-             *
-             * Contoh:
-             * 99
-             * 99.5
-             * 99.7
-             * 99.9
-             * 99.95
-             *
-             * NULL = belum ditentukan.
-             */
+     * Persentase SLA.
+     *
+     * Contoh:
+     * 99
+     * 99.5
+     * 99.7
+     * 99.9
+     * 99.95
+     */
             $table->decimal('sla_percentage', 7, 4)
                 ->nullable();
 
             /*
-             * Awal berlakunya aturan SLA.
-             */
+     * Awal berlakunya aturan SLA.
+     */
             $table->date('effective_from');
 
             /*
-             * Akhir berlakunya aturan SLA.
-             *
-             * NULL = masih berlaku.
-             */
+     * Akhir berlakunya aturan SLA.
+     *
+     * NULL = masih berlaku.
+     */
             $table->date('effective_until')
                 ->nullable();
 
@@ -62,6 +74,7 @@ return new class extends Migration
 
             $table->index([
                 'pelanggan_id',
+                'scope',
                 'online_billing_id',
             ]);
 
