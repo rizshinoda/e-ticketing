@@ -12,54 +12,41 @@ return new class extends Migration
             $table->id();
 
             /*
-             * Customer/site yang mengalami incident.
-             */
+     * Customer/site yang mengalami incident.
+     */
             $table->foreignId('ticket_customer_id')
                 ->constrained('ticket_customers')
                 ->cascadeOnDelete();
 
             /*
-             * Nomor urut incident dalam satu customer/site.
-             *
-             * 1 = gangguan pertama
-             * 2 = setelah reopen
-             * 3 = reopen berikutnya
-             */
+     * Nomor urut incident dalam satu customer/site.
+     *
+     * 1 = gangguan pertama
+     * 2 = setelah reopen
+     * 3 = reopen berikutnya
+     */
             $table->unsignedInteger('incident_number');
 
             /*
-             * Kendala pada incident ini.
-             */
+     * Kendala pada incident ini.
+     */
             $table->foreignId('kendala_id')
                 ->constrained('ticket_categories')
                 ->restrictOnDelete();
 
             /*
-             * Waktu customer melaporkan gangguan.
-             *
-             * Menjadi awal perhitungan waktu incident.
-             */
+     * Waktu customer melaporkan gangguan.
+     *
+     * Untuk ticket, waktu utama berada di tabel tickets.
+     * Incident tetap menyimpan informasi detail kejadian.
+     */
             $table->timestamp('reported_at');
 
             /*
-             * Waktu support pertama kali merespons
-             * incident ini.
-             */
+     * Waktu support pertama kali merespons
+     * incident ini.
+     */
             $table->timestamp('first_response_at')
-                ->nullable();
-
-            /*
-             * Waktu incident dinyatakan selesai.
-             */
-            $table->timestamp('resolved_at')
-                ->nullable();
-
-            /*
-             * Total durasi incident.
-             *
-             * Bukan MTTR.
-             */
-            $table->unsignedInteger('downtime_minutes')
                 ->nullable();
 
             $table->timestamps();

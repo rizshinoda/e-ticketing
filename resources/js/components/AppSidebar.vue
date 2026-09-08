@@ -35,6 +35,11 @@ const mainNavItems: NavItem[] = [
         href: '/master/kendala',
         icon: ListChecks,
     },
+    {
+        title: 'Restitusi',
+        href: '/restitution/',
+        icon: ListChecks,
+    },
 ];
 </script>
 

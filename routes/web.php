@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\RestitutionController;
 use App\Http\Controllers\TicketCategoryController;
 use App\Http\Controllers\TicketController;
 use Illuminate\Support\Facades\Route;
@@ -38,21 +39,24 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 'storeUpdate',
             ])->name('updates.store');
 
-            Route::post(
-                '/{ticket}/incidents/{incident}/stop-clock',
-                [
-                    TicketController::class,
-                    'startStopClock',
-                ]
-            )->name('incidents.stop-clock.start');
+            Route::post('/{ticket}/resolve', [
+                TicketController::class,
+                'resolve',
+            ])->name('resolve');
 
-            Route::post(
-                '/{ticket}/incidents/{incident}/stop-clock/resume',
-                [
-                    TicketController::class,
-                    'endStopClock',
-                ]
-            )->name('incidents.stop-clock.end');
+            // =====================================================
+            // STOP CLOCK - TICKET LEVEL
+            // =====================================================
+
+            Route::post('/{ticket}/stop-clock', [
+                TicketController::class,
+                'startStopClock',
+            ])->name('stop-clock.start');
+
+            Route::post('/{ticket}/stop-clock/resume', [
+                TicketController::class,
+                'endStopClock',
+            ])->name('stop-clock.end');
         });
     Route::prefix('master')
         ->name('master.')
@@ -77,6 +81,24 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 '/kendala/{kendala}',
                 [TicketCategoryController::class, 'destroy']
             )->name('kendala.destroy');
+        });
+
+    Route::prefix('restitution')
+        ->name('restitution.')
+        ->group(function () {
+            Route::get('/', [
+                RestitutionController::class,
+                'index',
+            ])->name('index');
+
+            Route::post('/calculate', [
+                RestitutionController::class,
+                'calculate',
+            ])->name('calculate');
+            Route::get('/sites/{pelanggan}', [
+                RestitutionController::class,
+                'sites',
+            ])->name('sites');
         });
 });
 

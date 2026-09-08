@@ -31,7 +31,46 @@ class TicketController extends Controller
             'tickets' => $tickets,
         ]);
     }
+    public function searchOnlineBillings(Request $request)
+    {
+        $search = trim($request->input('search', ''));
 
+        if ($search === '') {
+            return response()->json([]);
+        }
+
+        $onlineBillings = OnlineBilling::query()
+            ->with('pelanggan')
+            ->where('status', 'active')
+            ->where(function ($query) use ($search) {
+                $query
+                    ->where('nama_site', 'like', "%{$search}%")
+                    ->orWhere('no_jaringan', 'like', "%{$search}%")
+                    ->orWhere('layanan', 'like', "%{$search}%")
+                    ->orWhereHas('pelanggan', function ($q) use ($search) {
+                        $q->where(
+                            'nama_pelanggan',
+                            'like',
+                            "%{$search}%"
+                        );
+                    });
+            })
+            ->limit(20)
+            ->get();
+
+        return response()->json(
+            $onlineBillings->map(function ($billing) {
+                return [
+                    'id' => $billing->id,
+                    'customer_name' => $billing->pelanggan?->nama_pelanggan,
+                    'site_name' => $billing->nama_site,
+                    'no_jaringan' => $billing->no_jaringan,
+                    'layanan' => $billing->layanan,
+                    'bandwidth' => $billing->bandwidth,
+                ];
+            })
+        );
+    }
     /**
      * Form membuat ticket.
      */
@@ -252,16 +291,12 @@ class TicketController extends Controller
 
             $ticket = Ticket::create([
                 'ticket_number' => $ticketNumber,
-
                 'ticket_type' => $validated['ticket_type'],
-
                 'description' => $validated['description'],
-
                 'priority' => $validated['priority'],
-
                 'status' => 'open',
-
                 'created_by' => Auth::id(),
+                'reported_at' => $validated['reported_at'],
             ]);
 
             /*
@@ -368,8 +403,9 @@ class TicketController extends Controller
 
             'customers.onlineBilling',
             'customers.incidents.category',
-            'customers.incidents.stopClocks',
-            'customers.incidents.rfos',
+
+            'stopClocks',
+            'rfos',
 
             'updates.user',
             'updates.attachments',
@@ -380,46 +416,7 @@ class TicketController extends Controller
         ]);
     }
 
-    public function searchOnlineBillings(Request $request)
-    {
-        $search = trim($request->input('search', ''));
 
-        if ($search === '') {
-            return response()->json([]);
-        }
-
-        $onlineBillings = OnlineBilling::query()
-            ->with('pelanggan')
-            ->where('status', 'active')
-            ->where(function ($query) use ($search) {
-                $query
-                    ->where('nama_site', 'like', "%{$search}%")
-                    ->orWhere('no_jaringan', 'like', "%{$search}%")
-                    ->orWhere('layanan', 'like', "%{$search}%")
-                    ->orWhereHas('pelanggan', function ($q) use ($search) {
-                        $q->where(
-                            'nama_pelanggan',
-                            'like',
-                            "%{$search}%"
-                        );
-                    });
-            })
-            ->limit(20)
-            ->get();
-
-        return response()->json(
-            $onlineBillings->map(function ($billing) {
-                return [
-                    'id' => $billing->id,
-                    'customer_name' => $billing->pelanggan?->nama_pelanggan,
-                    'site_name' => $billing->nama_site,
-                    'no_jaringan' => $billing->no_jaringan,
-                    'layanan' => $billing->layanan,
-                    'bandwidth' => $billing->bandwidth,
-                ];
-            })
-        );
-    }
 
     public function storeUpdate(
         Request $request,
@@ -490,41 +487,6 @@ class TicketController extends Controller
                     'status' =>
                     'on_progress',
                 ]);
-
-
-                /*
-            |--------------------------------------------------------------------------
-            | Update Incident
-            |--------------------------------------------------------------------------
-            */
-
-                $ticket->load(
-                    'customers.incidents'
-                );
-
-                foreach (
-                    $ticket->customers
-                    as $customer
-                ) {
-
-                    $incident =
-                        $customer->incidents()
-                        ->whereNull(
-                            'first_response_at'
-                        )
-                        ->latest(
-                            'incident_number'
-                        )
-                        ->first();
-
-                    if ($incident) {
-
-                        $incident->update([
-                            'first_response_at' =>
-                            $firstResponseAt,
-                        ]);
-                    }
-                }
             }
 
 
@@ -597,7 +559,6 @@ class TicketController extends Controller
     public function startStopClock(
         Request $request,
         Ticket $ticket,
-        TicketIncident $incident
     ) {
         $validated = $request->validate([
             'reason' => [
@@ -607,20 +568,6 @@ class TicketController extends Controller
             ],
         ]);
 
-        /*
-    |--------------------------------------------------------------------------
-    | Pastikan incident memang milik ticket
-    |--------------------------------------------------------------------------
-    */
-
-        $incident->load('ticketCustomer');
-
-        if (
-            !$incident->ticketCustomer ||
-            $incident->ticketCustomer->ticket_id !== $ticket->id
-        ) {
-            abort(404);
-        }
 
         /*
     |--------------------------------------------------------------------------
@@ -635,18 +582,7 @@ class TicketController extends Controller
             ]);
         }
 
-        /*
-    |--------------------------------------------------------------------------
-    | Incident sudah resolved?
-    |--------------------------------------------------------------------------
-    */
 
-        if ($incident->resolved_at) {
-            return back()->withErrors([
-                'stop_clock' =>
-                'Incident ini sudah selesai.',
-            ]);
-        }
 
         /*
     |--------------------------------------------------------------------------
@@ -654,15 +590,14 @@ class TicketController extends Controller
     |--------------------------------------------------------------------------
     */
 
-        $activeStopClock = $incident
+        $activeStopClock = $ticket
             ->stopClocks()
             ->whereNull('ended_at')
             ->exists();
-
         if ($activeStopClock) {
             return back()->withErrors([
                 'stop_clock' =>
-                'Incident ini sedang dalam kondisi Stop Clock.',
+                'Ticket sedang dalam kondisi Stop Clock.',
             ]);
         }
 
@@ -672,14 +607,10 @@ class TicketController extends Controller
     |--------------------------------------------------------------------------
     */
 
-        $incident->stopClocks()->create([
+        $ticket->stopClocks()->create([
             'started_at' => now(),
-
-            'reason' =>
-            $validated['reason'],
-
-            'started_by' =>
-            Auth::id(),
+            'reason' => $validated['reason'],
+            'started_by' => Auth::id(),
         ]);
 
         return back()->with(
@@ -689,31 +620,15 @@ class TicketController extends Controller
     }
 
     public function endStopClock(
-        Ticket $ticket,
-        TicketIncident $incident
+        Ticket $ticket
     ) {
-        /*
-    |--------------------------------------------------------------------------
-    | Pastikan incident memang milik ticket
-    |--------------------------------------------------------------------------
-    */
-
-        $incident->load('ticketCustomer');
-
-        if (
-            !$incident->ticketCustomer ||
-            $incident->ticketCustomer->ticket_id !== $ticket->id
-        ) {
-            abort(404);
-        }
-
         /*
     |--------------------------------------------------------------------------
     | Cari Stop Clock aktif
     |--------------------------------------------------------------------------
     */
 
-        $stopClock = $incident
+        $stopClock = $ticket
             ->stopClocks()
             ->whereNull('ended_at')
             ->latest('started_at')
@@ -734,14 +649,26 @@ class TicketController extends Controller
 
         $stopClock->update([
             'ended_at' => now(),
-
-            'ended_by' =>
-            Auth::id(),
+            'ended_by' => Auth::id(),
         ]);
 
         return back()->with(
             'success',
             'Stop Clock berhasil dihentikan.'
+        );
+    }
+
+    public function resolve(Ticket $ticket)
+    {
+        if ($ticket->status !== 'on_progress') {
+            return back()->withErrors([
+                'resolve' => 'Ticket hanya dapat di-resolve ketika status On Progress.',
+            ]);
+        }
+
+        return back()->with(
+            'success',
+            'Validasi resolve berhasil.'
         );
     }
 }

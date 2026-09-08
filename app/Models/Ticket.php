@@ -20,12 +20,15 @@ class Ticket extends Model
         'created_by',
         'resolved_by',
         'closed_by',
+        'reported_at',
         'first_response_at',
         'resolved_at',
+        'downtime_minutes',
         'closed_at',
     ];
 
     protected $casts = [
+        'reported_at'       => 'datetime',
         'first_response_at' => 'datetime',
         'resolved_at'       => 'datetime',
         'closed_at'         => 'datetime',
@@ -82,6 +85,24 @@ class Ticket extends Model
     {
         return $this->hasMany(
             TicketUpdate::class,
+            'ticket_id'
+        );
+    }
+
+    /**
+     * Stop Clock pada ticket.
+     */
+    public function stopClocks(): HasMany
+    {
+        return $this->hasMany(
+            TicketStopClock::class,
+            'ticket_id'
+        );
+    }
+    public function rfos(): HasMany
+    {
+        return $this->hasMany(
+            Rfo::class,
             'ticket_id'
         );
     }

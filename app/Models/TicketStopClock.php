@@ -6,12 +6,12 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class IncidentStopClock extends Model
+class TicketStopClock extends Model
 {
     use HasFactory;
 
     protected $fillable = [
-        'ticket_incident_id',
+        'ticket_id',
         'started_at',
         'ended_at',
         'reason',
@@ -25,13 +25,13 @@ class IncidentStopClock extends Model
     ];
 
     /**
-     * Incident yang mengalami Stop Clock.
+     * Ticket yang mengalami Stop Clock.
      */
-    public function incident(): BelongsTo
+    public function ticket(): BelongsTo
     {
         return $this->belongsTo(
-            TicketIncident::class,
-            'ticket_incident_id'
+            Ticket::class,
+            'ticket_id'
         );
     }
 

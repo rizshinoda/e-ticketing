@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Link, useForm } from '@inertiajs/vue3';
+import { Link, useForm, usePage } from '@inertiajs/vue3';
 
 /*
 |--------------------------------------------------------------------------
@@ -37,11 +37,7 @@ interface Incident {
     incident_number: number;
     reported_at: string;
     first_response_at: string | null;
-    resolved_at: string | null;
-    downtime_minutes: number | null;
     category: Category;
-    stop_clocks: StopClock[];
-    rfos: Rfo[];
 }
 
 interface Customer {
@@ -79,20 +75,21 @@ interface Ticket {
     ticket_number: string;
     ticket_type: 'individual' | 'gamas';
     description: string | null;
-
     priority: string;
     status: string;
 
     first_response_at: string | null;
+    reported_at: string;
     resolved_at: string | null;
+    downtime_minutes: number | null;
     closed_at: string | null;
 
     created_at: string;
 
     creator: User | null;
-
     customers: Customer[];
-
+    stop_clocks: StopClock[];
+    rfos: Rfo[];
     updates: Update[];
 }
 
@@ -105,7 +102,11 @@ interface Ticket {
 const props = defineProps<{
     ticket: Ticket;
 }>();
-
+const page = usePage<{
+    flash: {
+        success?: string;
+    };
+}>();
 /*
 |--------------------------------------------------------------------------
 | Format Date
@@ -276,24 +277,10 @@ const submitUpdate = () => {
 */
 
 const stopClockForm = useForm<{
-    incident_id: number | null;
     reason: string;
 }>({
-    incident_id: null,
     reason: '',
 });
-
-/*
-|--------------------------------------------------------------------------
-| Open Stop Clock Form
-|--------------------------------------------------------------------------
-*/
-
-const openStopClockForm = (incidentId: number) => {
-    stopClockForm.reset();
-
-    stopClockForm.incident_id = incidentId;
-};
 
 /*
 |--------------------------------------------------------------------------
@@ -312,20 +299,12 @@ const cancelStopClockForm = () => {
 */
 
 const submitStopClock = () => {
-    if (!stopClockForm.incident_id) {
-        return;
-    }
-
-    stopClockForm.post(
-        `/tickets/${props.ticket.id}/incidents/${stopClockForm.incident_id}/stop-clock`,
-        {
-            preserveScroll: true,
-
-            onSuccess: () => {
-                stopClockForm.reset();
-            },
+    stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock`, {
+        preserveScroll: true,
+        onSuccess: () => {
+            stopClockForm.reset();
         },
-    );
+    });
 };
 
 /*
@@ -334,38 +313,53 @@ const submitStopClock = () => {
 |--------------------------------------------------------------------------
 */
 
-const resumeStopClock = (incidentId: number) => {
-    stopClockForm.post(
-        `/tickets/${props.ticket.id}/incidents/${incidentId}/stop-clock/resume`,
-        {
-            preserveScroll: true,
-
-            onSuccess: () => {
-                stopClockForm.reset();
-            },
+const resumeStopClock = () => {
+    stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock/resume`, {
+        preserveScroll: true,
+        onSuccess: () => {
+            stopClockForm.reset();
         },
-    );
+    });
 };
+/*
+|--------------------------------------------------------------------------
+| Resolve Ticket
+|--------------------------------------------------------------------------
+*/
 
+const resolveTicket = () => {
+    useForm({}).post(`/tickets/${props.ticket.id}/resolve`, {
+        preserveScroll: true,
+    });
+};
 /*
 |--------------------------------------------------------------------------
 | Check Active Stop Clock
 |--------------------------------------------------------------------------
 */
 
-const hasActiveStopClock = (incident: Incident) => {
-    return incident.stop_clocks.some(
+const hasActiveStopClock = () => {
+    return props.ticket.stop_clocks.some(
         (stopClock) => stopClock.ended_at === null,
     );
 };
 </script>
 
 <template>
+    <!-- =====================================================
+         FLASH MESSAGE
+    ====================================================== -->
+    <div
+        v-if="page.props.flash.success"
+        class="mb-4 rounded-md bg-green-100 px-4 py-3 text-sm text-green-700"
+    >
+        {{ page.props.flash.success }}
+    </div>
+
     <div class="p-6">
         <!-- =====================================================
              HEADER
         ====================================================== -->
-
         <div class="mb-6 flex items-start justify-between">
             <div>
                 <div class="mb-1 text-sm text-muted-foreground">Ticket</div>
@@ -376,7 +370,6 @@ const hasActiveStopClock = (incident: Incident) => {
 
                 <div class="mt-2 flex flex-wrap gap-2">
                     <!-- Ticket Type -->
-
                     <span class="rounded-md bg-muted px-2 py-1 text-xs">
                         {{
                             ticket.ticket_type === 'gamas'
@@ -386,7 +379,6 @@ const hasActiveStopClock = (incident: Incident) => {
                     </span>
 
                     <!-- Priority -->
-
                     <span
                         class="rounded-md px-2 py-1 text-xs font-medium"
                         :class="priorityClass(ticket.priority)"
@@ -395,7 +387,6 @@ const hasActiveStopClock = (incident: Incident) => {
                     </span>
 
                     <!-- Status -->
-
                     <span
                         class="rounded-md px-2 py-1 text-xs font-medium"
                         :class="statusClass(ticket.status)"
@@ -416,17 +407,14 @@ const hasActiveStopClock = (incident: Incident) => {
         <!-- =====================================================
              MAIN GRID
         ====================================================== -->
-
         <div class="grid gap-6 lg:grid-cols-3">
             <!-- =================================================
                  LEFT / MAIN
             ================================================== -->
-
             <div class="space-y-6 lg:col-span-2">
                 <!-- =================================================
                      DESCRIPTION
                 ================================================== -->
-
                 <div class="rounded-lg border p-5">
                     <h2 class="mb-3 font-semibold">Deskripsi Gangguan</h2>
 
@@ -438,7 +426,6 @@ const hasActiveStopClock = (incident: Incident) => {
                 <!-- =================================================
                      CUSTOMER / SITE
                 ================================================== -->
-
                 <div class="rounded-lg border p-5">
                     <div class="mb-4 flex items-center justify-between">
                         <h2 class="font-semibold">Customer / Site Terdampak</h2>
@@ -456,7 +443,6 @@ const hasActiveStopClock = (incident: Incident) => {
                             class="rounded-lg border p-4"
                         >
                             <!-- Customer Info -->
-
                             <div class="flex items-start justify-between">
                                 <div>
                                     <div class="font-medium">
@@ -471,13 +457,11 @@ const hasActiveStopClock = (incident: Incident) => {
                                         class="mt-1 text-xs text-muted-foreground"
                                     >
                                         No Jaringan:
-
                                         {{ customer.no_jaringan || '-' }}
                                     </div>
 
                                     <div class="text-xs text-muted-foreground">
                                         Dilaporkan melalui:
-
                                         {{ customer.reported_via || '-' }}
                                     </div>
                                 </div>
@@ -486,7 +470,6 @@ const hasActiveStopClock = (incident: Incident) => {
                             <!-- =================================================
                                  INCIDENTS
                             ================================================== -->
-
                             <div class="mt-4 space-y-3">
                                 <div
                                     v-for="incident in customer.incidents"
@@ -494,7 +477,6 @@ const hasActiveStopClock = (incident: Incident) => {
                                     class="rounded-md bg-muted/40 p-4"
                                 >
                                     <!-- Incident Header -->
-
                                     <div
                                         class="mb-3 flex items-center justify-between"
                                     >
@@ -512,10 +494,10 @@ const hasActiveStopClock = (incident: Incident) => {
                                     </div>
 
                                     <!-- Incident Times -->
-
                                     <div
-                                        class="grid gap-3 text-sm md:grid-cols-3"
+                                        class="grid gap-3 text-sm md:grid-cols-2"
                                     >
+                                        <!-- Reported -->
                                         <div>
                                             <div
                                                 class="text-xs text-muted-foreground"
@@ -532,6 +514,7 @@ const hasActiveStopClock = (incident: Incident) => {
                                             </div>
                                         </div>
 
+                                        <!-- First Response -->
                                         <div>
                                             <div
                                                 class="text-xs text-muted-foreground"
@@ -545,292 +528,6 @@ const hasActiveStopClock = (incident: Incident) => {
                                                         incident.first_response_at,
                                                     )
                                                 }}
-                                            </div>
-                                        </div>
-
-                                        <div>
-                                            <div
-                                                class="text-xs text-muted-foreground"
-                                            >
-                                                Resolved
-                                            </div>
-
-                                            <div>
-                                                {{
-                                                    formatDate(
-                                                        incident.resolved_at,
-                                                    )
-                                                }}
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <!-- Downtime -->
-
-                                    <div class="mt-3 text-sm">
-                                        <span class="text-muted-foreground">
-                                            Downtime:
-                                        </span>
-
-                                        {{
-                                            formatDowntime(
-                                                incident.downtime_minutes,
-                                            )
-                                        }}
-                                    </div>
-
-                                    <!-- Stop Clock -->
-
-                                    <!-- =================================================
-     STOP CLOCK
-================================================== -->
-
-                                    <div class="mt-4 border-t pt-4">
-                                        <!-- =================================================
-         STOP CLOCK ACTION
-    ================================================== -->
-
-                                        <div
-                                            class="flex items-center justify-between"
-                                        >
-                                            <div>
-                                                <div
-                                                    class="text-sm font-medium"
-                                                >
-                                                    Stop Clock
-                                                </div>
-
-                                                <div
-                                                    v-if="
-                                                        hasActiveStopClock(
-                                                            incident,
-                                                        )
-                                                    "
-                                                    class="mt-1 text-xs text-yellow-600 dark:text-yellow-400"
-                                                >
-                                                    SLA sedang dihentikan
-                                                </div>
-
-                                                <div
-                                                    v-else
-                                                    class="mt-1 text-xs text-muted-foreground"
-                                                >
-                                                    SLA berjalan
-                                                </div>
-                                            </div>
-
-                                            <!-- =================================================
-             STOP CLOCK BUTTON
-        ================================================== -->
-
-                                            <button
-                                                v-if="
-                                                    !hasActiveStopClock(
-                                                        incident,
-                                                    ) &&
-                                                    !incident.resolved_at &&
-                                                    ticket.status ===
-                                                        'on_progress'
-                                                "
-                                                type="button"
-                                                class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
-                                                @click="
-                                                    openStopClockForm(
-                                                        incident.id,
-                                                    )
-                                                "
-                                            >
-                                                Stop Clock
-                                            </button>
-
-                                            <!-- =================================================
-             RESUME BUTTON
-        ================================================== -->
-
-                                            <button
-                                                v-else-if="
-                                                    hasActiveStopClock(incident)
-                                                "
-                                                type="button"
-                                                class="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
-                                                :disabled="
-                                                    stopClockForm.processing
-                                                "
-                                                @click="
-                                                    resumeStopClock(incident.id)
-                                                "
-                                            >
-                                                {{
-                                                    stopClockForm.processing
-                                                        ? 'Memproses...'
-                                                        : 'Resume Clock'
-                                                }}
-                                            </button>
-                                        </div>
-
-                                        <!-- =================================================
-         STOP CLOCK FORM
-    ================================================== -->
-
-                                        <div
-                                            v-if="
-                                                stopClockForm.incident_id ===
-                                                incident.id
-                                            "
-                                            class="mt-3 rounded-md border bg-background p-4"
-                                        >
-                                            <form
-                                                class="space-y-3"
-                                                @submit.prevent="
-                                                    submitStopClock
-                                                "
-                                            >
-                                                <div>
-                                                    <label
-                                                        class="mb-2 block text-sm font-medium"
-                                                    >
-                                                        Alasan Stop Clock
-                                                    </label>
-
-                                                    <textarea
-                                                        v-model="
-                                                            stopClockForm.reason
-                                                        "
-                                                        rows="3"
-                                                        class="w-full rounded-md border px-3 py-2 text-sm"
-                                                        placeholder="Contoh: Menunggu customer melakukan pengecekan power CPE..."
-                                                    ></textarea>
-
-                                                    <p
-                                                        v-if="
-                                                            stopClockForm.errors
-                                                                .reason
-                                                        "
-                                                        class="mt-1 text-sm text-destructive"
-                                                    >
-                                                        {{
-                                                            stopClockForm.errors
-                                                                .reason
-                                                        }}
-                                                    </p>
-                                                </div>
-
-                                                <div
-                                                    class="flex justify-end gap-2"
-                                                >
-                                                    <button
-                                                        type="button"
-                                                        class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
-                                                        :disabled="
-                                                            stopClockForm.processing
-                                                        "
-                                                        @click="
-                                                            cancelStopClockForm
-                                                        "
-                                                    >
-                                                        Batal
-                                                    </button>
-
-                                                    <button
-                                                        type="submit"
-                                                        class="rounded-md bg-yellow-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-                                                        :disabled="
-                                                            stopClockForm.processing ||
-                                                            !stopClockForm.reason.trim()
-                                                        "
-                                                    >
-                                                        {{
-                                                            stopClockForm.processing
-                                                                ? 'Menyimpan...'
-                                                                : 'Mulai Stop Clock'
-                                                        }}
-                                                    </button>
-                                                </div>
-                                            </form>
-                                        </div>
-
-                                        <!-- =================================================
-         STOP CLOCK HISTORY
-    ================================================== -->
-
-                                        <div
-                                            v-if="incident.stop_clocks.length"
-                                            class="mt-4 space-y-2"
-                                        >
-                                            <div
-                                                class="text-xs font-medium text-muted-foreground"
-                                            >
-                                                Riwayat Stop Clock
-                                            </div>
-
-                                            <div
-                                                v-for="stopClock in incident.stop_clocks"
-                                                :key="stopClock.id"
-                                                class="rounded-md border bg-background p-3 text-xs"
-                                            >
-                                                <!-- Time -->
-
-                                                <div
-                                                    class="grid gap-2 sm:grid-cols-2"
-                                                >
-                                                    <div>
-                                                        <span
-                                                            class="text-muted-foreground"
-                                                        >
-                                                            Mulai:
-                                                        </span>
-
-                                                        <span class="ml-1">
-                                                            {{
-                                                                formatDate(
-                                                                    stopClock.started_at,
-                                                                )
-                                                            }}
-                                                        </span>
-                                                    </div>
-
-                                                    <div>
-                                                        <span
-                                                            class="text-muted-foreground"
-                                                        >
-                                                            Selesai:
-                                                        </span>
-
-                                                        <span class="ml-1">
-                                                            {{
-                                                                formatDate(
-                                                                    stopClock.ended_at,
-                                                                )
-                                                            }}
-                                                        </span>
-                                                    </div>
-                                                </div>
-
-                                                <!-- Reason -->
-
-                                                <div class="mt-2">
-                                                    <span
-                                                        class="text-muted-foreground"
-                                                    >
-                                                        Reason:
-                                                    </span>
-
-                                                    <span class="ml-1">
-                                                        {{ stopClock.reason }}
-                                                    </span>
-                                                </div>
-
-                                                <!-- Active indicator -->
-
-                                                <div
-                                                    v-if="
-                                                        stopClock.ended_at ===
-                                                        null
-                                                    "
-                                                    class="mt-2 font-medium text-yellow-600 dark:text-yellow-400"
-                                                >
-                                                    ⏸ Sedang aktif
-                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -848,13 +545,236 @@ const hasActiveStopClock = (incident: Incident) => {
                 </div>
 
                 <!-- =================================================
-                     ADD UPDATE
+                     STOP CLOCK - TICKET LEVEL
                 ================================================== -->
+                <div class="rounded-lg border p-5">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="font-semibold">Stop Clock</h2>
+
+                            <div
+                                v-if="hasActiveStopClock()"
+                                class="mt-1 text-xs text-yellow-600 dark:text-yellow-400"
+                            >
+                                SLA sedang dihentikan
+                            </div>
+
+                            <div
+                                v-else
+                                class="mt-1 text-xs text-muted-foreground"
+                            >
+                                SLA berjalan
+                            </div>
+                        </div>
+
+                        <!-- Start Stop Clock -->
+                        <button
+                            v-if="
+                                !hasActiveStopClock() &&
+                                ticket.status === 'on_progress'
+                            "
+                            type="button"
+                            class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
+                            @click="stopClockForm.reason = ''"
+                        >
+                            Stop Clock
+                        </button>
+
+                        <!-- Resume Stop Clock -->
+                        <button
+                            v-else-if="hasActiveStopClock()"
+                            type="button"
+                            class="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
+                            :disabled="stopClockForm.processing"
+                            @click="resumeStopClock"
+                        >
+                            {{
+                                stopClockForm.processing
+                                    ? 'Memproses...'
+                                    : 'Resume Clock'
+                            }}
+                        </button>
+                    </div>
+
+                    <!-- =================================================
+                         STOP CLOCK FORM
+                    ================================================== -->
+                    <div
+                        v-if="
+                            ticket.status === 'on_progress' &&
+                            !hasActiveStopClock()
+                        "
+                        class="mt-3 rounded-md border bg-background p-4"
+                    >
+                        <form
+                            class="space-y-3"
+                            @submit.prevent="submitStopClock"
+                        >
+                            <div>
+                                <label class="mb-2 block text-sm font-medium">
+                                    Alasan Stop Clock
+                                </label>
+
+                                <textarea
+                                    v-model="stopClockForm.reason"
+                                    rows="3"
+                                    class="w-full rounded-md border px-3 py-2 text-sm"
+                                    placeholder="Contoh: Menunggu customer melakukan pengecekan power CPE..."
+                                ></textarea>
+
+                                <p
+                                    v-if="stopClockForm.errors.reason"
+                                    class="mt-1 text-sm text-destructive"
+                                >
+                                    {{ stopClockForm.errors.reason }}
+                                </p>
+                            </div>
+
+                            <div class="flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
+                                    :disabled="stopClockForm.processing"
+                                    @click="cancelStopClockForm"
+                                >
+                                    Batal
+                                </button>
+
+                                <button
+                                    type="submit"
+                                    class="rounded-md bg-yellow-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                                    :disabled="
+                                        stopClockForm.processing ||
+                                        !stopClockForm.reason.trim()
+                                    "
+                                >
+                                    {{
+                                        stopClockForm.processing
+                                            ? 'Menyimpan...'
+                                            : 'Mulai Stop Clock'
+                                    }}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- =================================================
+                         STOP CLOCK HISTORY
+                    ================================================== -->
+                    <div
+                        v-if="ticket.stop_clocks.length"
+                        class="mt-4 space-y-2"
+                    >
+                        <div class="text-xs font-medium text-muted-foreground">
+                            Riwayat Stop Clock
+                        </div>
+
+                        <div
+                            v-for="stopClock in ticket.stop_clocks"
+                            :key="stopClock.id"
+                            class="rounded-md border bg-background p-3 text-xs"
+                        >
+                            <!-- Time -->
+                            <div class="grid gap-2 sm:grid-cols-2">
+                                <div>
+                                    <span class="text-muted-foreground">
+                                        Mulai:
+                                    </span>
+
+                                    <span class="ml-1">
+                                        {{ formatDate(stopClock.started_at) }}
+                                    </span>
+                                </div>
+
+                                <div>
+                                    <span class="text-muted-foreground">
+                                        Selesai:
+                                    </span>
+
+                                    <span class="ml-1">
+                                        {{
+                                            stopClock.ended_at
+                                                ? formatDate(stopClock.ended_at)
+                                                : '-'
+                                        }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Reason -->
+                            <div class="mt-2">
+                                <span class="text-muted-foreground">
+                                    Reason:
+                                </span>
+
+                                <span class="ml-1">
+                                    {{ stopClock.reason }}
+                                </span>
+                            </div>
+
+                            <!-- Active Indicator -->
+                            <div
+                                v-if="stopClock.ended_at === null"
+                                class="mt-2 font-medium text-yellow-600 dark:text-yellow-400"
+                            >
+                                ⏸ Sedang aktif
+                            </div>
+                        </div>
+                    </div>
+
+                    <div
+                        v-else
+                        class="mt-4 py-4 text-center text-sm text-muted-foreground"
+                    >
+                        Belum ada riwayat Stop Clock.
+                    </div>
+                </div>
+
+                <!-- =================================================
+                     RFO
+                ================================================== -->
+                <div class="rounded-lg border p-5">
+                    <div class="mb-4 flex items-center justify-between">
+                        <h2 class="font-semibold">RFO</h2>
+
+                        <span class="text-xs text-muted-foreground">
+                            {{ ticket.rfos.length }} RFO
+                        </span>
+                    </div>
+
+                    <div v-if="ticket.rfos.length" class="space-y-3">
+                        <div
+                            v-for="rfo in ticket.rfos"
+                            :key="rfo.id"
+                            class="rounded-md border p-4"
+                        >
+                            <div class="flex items-center justify-between">
+                                <div class="font-medium">
+                                    {{ rfo.rfo_number }}
+                                </div>
+
+                                <div class="text-xs text-muted-foreground">
+                                    {{ formatDate(rfo.created_at) }}
+                                </div>
+                            </div>
+
+                            <div class="mt-3 text-sm whitespace-pre-wrap">
+                                {{ rfo.content }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div
+                        v-else
+                        class="py-4 text-center text-sm text-muted-foreground"
+                    >
+                        Belum ada RFO.
+                    </div>
+                </div>
 
                 <!-- =================================================
                      ACTIVITY / PROGRESS
                 ================================================== -->
-
                 <div class="rounded-lg border p-5">
                     <h2 class="mb-5 font-semibold">Activity / Progress</h2>
 
@@ -865,13 +785,11 @@ const hasActiveStopClock = (incident: Incident) => {
                             class="relative border-l pl-5"
                         >
                             <!-- Timeline Dot -->
-
                             <div
                                 class="absolute top-1 -left-1.5 h-3 w-3 rounded-full bg-primary"
                             ></div>
 
                             <!-- Update Header -->
-
                             <div
                                 class="flex items-center justify-between gap-4"
                             >
@@ -885,13 +803,11 @@ const hasActiveStopClock = (incident: Incident) => {
                             </div>
 
                             <!-- Message -->
-
                             <div class="mt-2 text-sm whitespace-pre-wrap">
                                 {{ update.message }}
                             </div>
 
                             <!-- Attachments -->
-
                             <div
                                 v-if="update.attachments.length"
                                 class="mt-3 space-y-2"
@@ -946,18 +862,15 @@ const hasActiveStopClock = (incident: Incident) => {
             <!-- =================================================
                  RIGHT SIDEBAR
             ================================================== -->
-
             <div class="space-y-6">
                 <!-- =================================================
                      TICKET INFORMATION
                 ================================================== -->
-
                 <div class="rounded-lg border p-5">
                     <h2 class="mb-4 font-semibold">Informasi Ticket</h2>
 
                     <div class="space-y-4 text-sm">
                         <!-- Created By -->
-
                         <div>
                             <div class="text-xs text-muted-foreground">
                                 Dibuat oleh
@@ -969,7 +882,6 @@ const hasActiveStopClock = (incident: Incident) => {
                         </div>
 
                         <!-- Created -->
-
                         <div>
                             <div class="text-xs text-muted-foreground">
                                 Dibuat
@@ -980,8 +892,18 @@ const hasActiveStopClock = (incident: Incident) => {
                             </div>
                         </div>
 
-                        <!-- First Response -->
+                        <!-- Reported -->
+                        <div>
+                            <div class="text-xs text-muted-foreground">
+                                Reported
+                            </div>
 
+                            <div>
+                                {{ formatDate(ticket.reported_at) }}
+                            </div>
+                        </div>
+
+                        <!-- First Response -->
                         <div>
                             <div class="text-xs text-muted-foreground">
                                 First Response
@@ -992,8 +914,18 @@ const hasActiveStopClock = (incident: Incident) => {
                             </div>
                         </div>
 
-                        <!-- Resolved -->
+                        <!-- Downtime -->
+                        <div>
+                            <div class="text-xs text-muted-foreground">
+                                Downtime
+                            </div>
 
+                            <div>
+                                {{ formatDowntime(ticket.downtime_minutes) }}
+                            </div>
+                        </div>
+
+                        <!-- Resolved -->
                         <div>
                             <div class="text-xs text-muted-foreground">
                                 Resolved
@@ -1005,7 +937,6 @@ const hasActiveStopClock = (incident: Incident) => {
                         </div>
 
                         <!-- Closed -->
-
                         <div>
                             <div class="text-xs text-muted-foreground">
                                 Closed
@@ -1017,12 +948,15 @@ const hasActiveStopClock = (incident: Incident) => {
                         </div>
                     </div>
                 </div>
+
+                <!-- =================================================
+                     ADD UPDATE
+                ================================================== -->
                 <div class="rounded-lg border p-5">
                     <h2 class="mb-4 font-semibold">Tambah Progress</h2>
 
                     <form class="space-y-4" @submit.prevent="submitUpdate">
                         <!-- Message -->
-
                         <div>
                             <label class="mb-2 block text-sm font-medium">
                                 Progress / Catatan
@@ -1033,7 +967,7 @@ const hasActiveStopClock = (incident: Incident) => {
                                 rows="4"
                                 class="w-full rounded-md border px-3 py-2"
                                 placeholder="Contoh: Dilakukan pengecekan CPE, ditemukan LOS..."
-                            />
+                            ></textarea>
 
                             <p
                                 v-if="updateForm.errors.message"
@@ -1044,7 +978,6 @@ const hasActiveStopClock = (incident: Incident) => {
                         </div>
 
                         <!-- Attachment -->
-
                         <div>
                             <label class="mb-2 block text-sm font-medium">
                                 Foto / Attachment
@@ -1072,7 +1005,6 @@ const hasActiveStopClock = (incident: Incident) => {
                         </div>
 
                         <!-- Selected Files -->
-
                         <div
                             v-if="updateForm.attachments.length"
                             class="space-y-2"
@@ -1100,7 +1032,6 @@ const hasActiveStopClock = (incident: Incident) => {
                         </div>
 
                         <!-- Submit -->
-
                         <div class="flex justify-end">
                             <button
                                 type="submit"
@@ -1123,17 +1054,16 @@ const hasActiveStopClock = (incident: Incident) => {
                 <!-- =================================================
                      ACTIONS
                 ================================================== -->
-
                 <div class="rounded-lg border p-5">
                     <h2 class="mb-4 font-semibold">Action</h2>
 
                     <div class="space-y-2">
                         <!-- Resolve -->
-
                         <button
                             v-if="ticket.status === 'on_progress'"
                             type="button"
-                            class="w-full rounded-md bg-green-600 px-4 py-2 text-sm text-white"
+                            class="w-full rounded-md bg-green-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+                            @click="resolveTicket"
                         >
                             Resolve Ticket
                         </button>

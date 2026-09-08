@@ -12,35 +12,32 @@ return new class extends Migration
             $table->id();
 
             /*
-             * Incident yang menjadi sumber RFO.
-             */
-            $table->foreignId('ticket_incident_id')
-                ->constrained('ticket_incidents')
+     * Ticket yang menjadi sumber RFO.
+     */
+            $table->foreignId('ticket_id')
+                ->constrained('tickets')
                 ->cascadeOnDelete();
 
             /*
-             * Nomor RFO.
-             */
+     * Nomor RFO.
+     */
             $table->string('rfo_number')->unique();
 
             /*
-             * Isi RFO yang disimpan sebagai history.
-             *
-             * Dapat dicopy secara manual ke WhatsApp
-             * atau Email.
-             */
+     * Isi RFO yang disimpan sebagai history.
+     */
             $table->longText('content');
 
             /*
-             * User yang membuat RFO.
-             */
+     * User yang membuat RFO.
+     */
             $table->foreignId('created_by')
                 ->constrained('users')
                 ->restrictOnDelete();
 
             $table->timestamps();
 
-            $table->index('ticket_incident_id');
+            $table->index('ticket_id');
         });
     }
 

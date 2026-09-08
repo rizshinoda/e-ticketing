@@ -12,27 +12,27 @@ return new class extends Migration
             $table->id();
 
             /*
-             * Nomor ticket.
-             */
+     * Nomor ticket.
+     */
             $table->string('ticket_number')->unique();
 
             /*
-             * individual = satu customer/site
-             * gamas      = dapat mencakup banyak customer/site
-             */
+     * individual = satu customer/site
+     * gamas     = dapat mencakup banyak customer/site
+     */
             $table->enum('ticket_type', [
                 'individual',
                 'gamas',
             ])->default('individual');
 
             /*
-             * Deskripsi umum ticket.
-             */
+     * Deskripsi umum ticket.
+     */
             $table->text('description')->nullable();
 
             /*
-             * Prioritas ticket.
-             */
+     * Prioritas ticket.
+     */
             $table->enum('priority', [
                 'low',
                 'medium',
@@ -41,8 +41,8 @@ return new class extends Migration
             ])->default('medium');
 
             /*
-             * Status keseluruhan ticket.
-             */
+     * Status keseluruhan ticket.
+     */
             $table->enum('status', [
                 'open',
                 'on_progress',
@@ -51,44 +51,59 @@ return new class extends Migration
             ])->default('open');
 
             /*
-             * User yang membuat ticket
-             * sekaligus menangani ticket.
-             */
+     * User yang membuat ticket
+     * sekaligus menangani ticket.
+     */
             $table->foreignId('created_by')
                 ->constrained('users')
                 ->restrictOnDelete();
 
             /*
-             * User yang melakukan resolve.
-             */
+     * User yang melakukan resolve.
+     */
             $table->foreignId('resolved_by')
                 ->nullable()
                 ->constrained('users')
                 ->nullOnDelete();
 
             /*
-             * User yang melakukan close.
-             */
+     * User yang melakukan close.
+     */
             $table->foreignId('closed_by')
                 ->nullable()
                 ->constrained('users')
                 ->nullOnDelete();
 
             /*
-             * Respons pertama terhadap ticket.
-             */
+     * Waktu customer melaporkan gangguan.
+     *
+     * Menjadi awal perhitungan downtime ticket.
+     */
+            $table->timestamp('reported_at');
+
+            /*
+     * Respons pertama terhadap ticket.
+     */
             $table->timestamp('first_response_at')
                 ->nullable();
 
             /*
-             * Ticket secara keseluruhan selesai.
-             */
+     * Ticket secara keseluruhan selesai.
+     */
             $table->timestamp('resolved_at')
                 ->nullable();
 
             /*
-             * Ticket benar-benar ditutup.
-             */
+     * Total downtime ticket dalam menit.
+     *
+     * Sudah dikurangi seluruh periode Stop Clock.
+     */
+            $table->unsignedInteger('downtime_minutes')
+                ->nullable();
+
+            /*
+     * Ticket benar-benar ditutup.
+     */
             $table->timestamp('closed_at')
                 ->nullable();
 

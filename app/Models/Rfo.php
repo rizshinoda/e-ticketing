@@ -11,7 +11,7 @@ class Rfo extends Model
     use HasFactory;
 
     protected $fillable = [
-        'ticket_incident_id',
+        'ticket_id',
         'rfo_number',
         'content',
         'created_by',
@@ -20,11 +20,11 @@ class Rfo extends Model
     /**
      * Incident yang menjadi sumber RFO.
      */
-    public function incident(): BelongsTo
+    public function ticket(): BelongsTo
     {
         return $this->belongsTo(
-            TicketIncident::class,
-            'ticket_incident_id'
+            Ticket::class,
+            'ticket_id'
         );
     }
 

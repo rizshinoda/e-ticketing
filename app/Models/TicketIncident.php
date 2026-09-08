@@ -18,14 +18,11 @@ class TicketIncident extends Model
         'kendala_id',
         'reported_at',
         'first_response_at',
-        'resolved_at',
-        'downtime_minutes',
     ];
 
     protected $casts = [
         'reported_at'       => 'datetime',
         'first_response_at' => 'datetime',
-        'resolved_at'       => 'datetime',
     ];
 
     /**
@@ -47,17 +44,6 @@ class TicketIncident extends Model
         return $this->belongsTo(
             TicketCategory::class,
             'kendala_id'
-        );
-    }
-
-    /**
-     * Stop Clock pada incident.
-     */
-    public function stopClocks(): HasMany
-    {
-        return $this->hasMany(
-            IncidentStopClock::class,
-            'ticket_incident_id'
         );
     }
 
