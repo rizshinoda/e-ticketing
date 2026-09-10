@@ -660,15 +660,59 @@ class TicketController extends Controller
 
     public function resolve(Ticket $ticket)
     {
+        // 1. Ticket harus berstatus on_progress
         if ($ticket->status !== 'on_progress') {
             return back()->withErrors([
                 'resolve' => 'Ticket hanya dapat di-resolve ketika status On Progress.',
             ]);
         }
 
+        // 2. Tidak boleh ada Stop Clock yang masih aktif
+        $activeStopClock = $ticket->stopClocks()
+            ->whereNull('ended_at')
+            ->exists();
+
+        if ($activeStopClock) {
+            return back()->withErrors([
+                'resolve' => 'Ticket tidak dapat di-resolve karena masih ada Stop Clock yang aktif.',
+            ]);
+        }
+
+        // 3. Tentukan waktu resolve
+        $resolvedAt = now();
+
+        // 4. Hitung total Stop Clock
+        $totalStopClockMinutes = $ticket->stopClocks()
+            ->whereNotNull('ended_at')
+            ->get()
+            ->sum(function ($stopClock) {
+                return $stopClock->started_at->diffInMinutes(
+                    $stopClock->ended_at
+                );
+            });
+
+        // 5. Hitung total waktu gangguan
+        $totalMinutes = $ticket->reported_at->diffInMinutes(
+            $resolvedAt
+        );
+
+        // 6. Kurangi waktu Stop Clock
+        $downtimeMinutes = max(
+            0,
+            $totalMinutes - $totalStopClockMinutes
+        );
+
+        // 7. Simpan hasil resolve
+        $ticket->update([
+            'status' => 'resolved',
+            'resolved_by' => Auth::id(),
+            'resolved_at' => $resolvedAt,
+            'downtime_minutes' => $downtimeMinutes,
+        ]);
+
         return back()->with(
             'success',
-            'Validasi resolve berhasil.'
+            'Ticket berhasil di-resolve.'
         );
     }
 }

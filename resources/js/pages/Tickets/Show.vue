@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Link, useForm, usePage } from '@inertiajs/vue3';
-
+import { computed } from 'vue';
 /*
 |--------------------------------------------------------------------------
 | Interfaces
@@ -36,7 +36,6 @@ interface Incident {
     id: number;
     incident_number: number;
     reported_at: string;
-    first_response_at: string | null;
     category: Category;
 }
 
@@ -98,7 +97,25 @@ interface Ticket {
 | Props
 |--------------------------------------------------------------------------
 */
+const groupedCustomers = computed(() => {
+    const groups: Record<string, Customer[]> = {};
 
+    props.ticket.customers.forEach((customer) => {
+        const customerName =
+            customer.customer_name || 'Customer Tidak Diketahui';
+
+        if (!groups[customerName]) {
+            groups[customerName] = [];
+        }
+
+        groups[customerName].push(customer);
+    });
+
+    return Object.entries(groups).map(([customerName, sites]) => ({
+        customerName,
+        sites,
+    }));
+});
 const props = defineProps<{
     ticket: Ticket;
 }>();
@@ -330,6 +347,10 @@ const resumeStopClock = () => {
 const resolveTicket = () => {
     useForm({}).post(`/tickets/${props.ticket.id}/resolve`, {
         preserveScroll: true,
+
+        onError: (errors) => {
+            console.log('RESOLVE ERRORS:', errors);
+        },
     });
 };
 /*
@@ -355,7 +376,12 @@ const hasActiveStopClock = () => {
     >
         {{ page.props.flash.success }}
     </div>
-
+    <div
+        v-if="page.props.errors.resolve"
+        class="mb-3 rounded-md bg-red-100 px-4 py-3 text-sm text-red-700"
+    >
+        {{ page.props.errors.resolve }}
+    </div>
     <div class="p-6">
         <!-- =====================================================
              HEADER
@@ -437,97 +463,90 @@ const hasActiveStopClock = () => {
                     </div>
 
                     <div v-if="ticket.customers.length" class="space-y-4">
+                        <!-- GROUP CUSTOMER -->
                         <div
-                            v-for="customer in ticket.customers"
-                            :key="customer.id"
+                            v-for="group in groupedCustomers"
+                            :key="group.customerName"
                             class="rounded-lg border p-4"
                         >
-                            <!-- Customer Info -->
-                            <div class="flex items-start justify-between">
-                                <div>
-                                    <div class="font-medium">
-                                        {{ customer.customer_name || '-' }}
-                                    </div>
-
-                                    <div class="text-sm">
-                                        {{ customer.site_name || '-' }}
-                                    </div>
-
-                                    <div
-                                        class="mt-1 text-xs text-muted-foreground"
-                                    >
-                                        No Jaringan:
-                                        {{ customer.no_jaringan || '-' }}
-                                    </div>
-
-                                    <div class="text-xs text-muted-foreground">
-                                        Dilaporkan melalui:
-                                        {{ customer.reported_via || '-' }}
-                                    </div>
+                            <!-- CUSTOMER NAME -->
+                            <div class="mb-4">
+                                <div class="font-medium">
+                                    {{ group.customerName }}
                                 </div>
                             </div>
 
-                            <!-- =================================================
-                                 INCIDENTS
-                            ================================================== -->
-                            <div class="mt-4 space-y-3">
+                            <!-- SITES -->
+                            <div class="space-y-4">
                                 <div
-                                    v-for="incident in customer.incidents"
-                                    :key="incident.id"
+                                    v-for="customer in group.sites"
+                                    :key="customer.id"
                                     class="rounded-md bg-muted/40 p-4"
                                 >
-                                    <!-- Incident Header -->
-                                    <div
-                                        class="mb-3 flex items-center justify-between"
-                                    >
-                                        <div class="font-medium">
-                                            Incident #{{
-                                                incident.incident_number
-                                            }}
+                                    <!-- SITE INFO -->
+                                    <div>
+                                        <div class="text-sm font-medium">
+                                            {{ customer.site_name || '-' }}
                                         </div>
 
-                                        <span
-                                            class="rounded-md bg-muted px-2 py-1 text-xs"
+                                        <div
+                                            class="mt-1 text-xs text-muted-foreground"
                                         >
-                                            {{ incident.category.name }}
-                                        </span>
+                                            No Jaringan:
+                                            {{ customer.no_jaringan || '-' }}
+                                        </div>
+
+                                        <div
+                                            class="text-xs text-muted-foreground"
+                                        >
+                                            Dilaporkan melalui:
+                                            {{ customer.reported_via || '-' }}
+                                        </div>
                                     </div>
 
-                                    <!-- Incident Times -->
-                                    <div
-                                        class="grid gap-3 text-sm md:grid-cols-2"
-                                    >
-                                        <!-- Reported -->
-                                        <div>
+                                    <!-- INCIDENTS -->
+                                    <div class="mt-4 space-y-3">
+                                        <div
+                                            v-for="incident in customer.incidents"
+                                            :key="incident.id"
+                                            class="rounded-md border bg-background p-4"
+                                        >
+                                            <!-- Incident Header -->
                                             <div
-                                                class="text-xs text-muted-foreground"
+                                                class="mb-3 flex items-center justify-between"
                                             >
-                                                Reported
+                                                <div class="font-medium">
+                                                    Incident #{{
+                                                        incident.incident_number
+                                                    }}
+                                                </div>
+
+                                                <span
+                                                    class="rounded-md bg-muted px-2 py-1 text-xs"
+                                                >
+                                                    {{ incident.category.name }}
+                                                </span>
                                             </div>
 
-                                            <div>
-                                                {{
-                                                    formatDate(
-                                                        incident.reported_at,
-                                                    )
-                                                }}
-                                            </div>
-                                        </div>
-
-                                        <!-- First Response -->
-                                        <div>
+                                            <!-- Incident Times -->
                                             <div
-                                                class="text-xs text-muted-foreground"
+                                                class="grid gap-3 text-sm md:grid-cols-2"
                                             >
-                                                First Response
-                                            </div>
+                                                <div>
+                                                    <div
+                                                        class="text-xs text-muted-foreground"
+                                                    >
+                                                        Reported
+                                                    </div>
 
-                                            <div>
-                                                {{
-                                                    formatDate(
-                                                        incident.first_response_at,
-                                                    )
-                                                }}
+                                                    <div>
+                                                        {{
+                                                            formatDate(
+                                                                incident.reported_at,
+                                                            )
+                                                        }}
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
