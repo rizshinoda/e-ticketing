@@ -11,53 +11,29 @@ return new class extends Migration
         Schema::create('ticket_incidents', function (Blueprint $table) {
             $table->id();
 
-            /*
-     * Customer/site yang mengalami incident.
-     */
-            $table->foreignId('ticket_customer_id')
-                ->constrained('ticket_customers')
+            $table->foreignId('ticket_id')
+                ->constrained('tickets')
                 ->cascadeOnDelete();
 
-            /*
-     * Nomor urut incident dalam satu customer/site.
-     *
-     * 1 = gangguan pertama
-     * 2 = setelah reopen
-     * 3 = reopen berikutnya
-     */
             $table->unsignedInteger('incident_number');
 
-            /*
-     * Kendala pada incident ini.
-     */
             $table->foreignId('kendala_id')
                 ->constrained('ticket_categories')
                 ->restrictOnDelete();
 
-            /*
-     * Waktu customer melaporkan gangguan.
-     *
-     * Untuk ticket, waktu utama berada di tabel tickets.
-     * Incident tetap menyimpan informasi detail kejadian.
-     */
             $table->timestamp('reported_at');
 
-            /*
-     * Waktu support pertama kali merespons
-     * incident ini.
-     */
-            $table->timestamp('first_response_at')
-                ->nullable();
+
 
             $table->timestamps();
 
             $table->unique([
-                'ticket_customer_id',
+                'ticket_id',
                 'incident_number',
             ]);
 
             $table->index([
-                'ticket_customer_id',
+                'ticket_id',
                 'reported_at',
             ]);
         });

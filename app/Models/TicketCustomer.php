@@ -41,15 +41,4 @@ class TicketCustomer extends Model
             'online_billing_id'
         );
     }
-
-    /**
-     * Incident yang terjadi pada customer/site ini.
-     */
-    public function incidents(): HasMany
-    {
-        return $this->hasMany(
-            TicketIncident::class,
-            'ticket_customer_id'
-        );
-    }
 }

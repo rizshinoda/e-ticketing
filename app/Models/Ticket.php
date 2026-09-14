@@ -106,4 +106,8 @@ class Ticket extends Model
             'ticket_id'
         );
     }
+    public function incidents(): HasMany
+    {
+        return $this->hasMany(TicketIncident::class, 'ticket_id');
+    }
 }

@@ -64,8 +64,12 @@ const form = useForm({
 
     priority: 'medium',
 
-    reported_at: new Date().toISOString().slice(0, 16),
-
+    reported_at: new Date()
+        .toLocaleString('sv-SE', {
+            timeZone: 'Asia/Jakarta',
+        })
+        .replace(' ', 'T')
+        .slice(0, 16),
     description: '',
 });
 

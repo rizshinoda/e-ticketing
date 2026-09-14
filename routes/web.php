@@ -57,6 +57,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 TicketController::class,
                 'endStopClock',
             ])->name('stop-clock.end');
+            Route::post('/{ticket}/reopen', [
+                TicketController::class,
+                'reopen',
+            ])->name('reopen');
         });
     Route::prefix('master')
         ->name('master.')

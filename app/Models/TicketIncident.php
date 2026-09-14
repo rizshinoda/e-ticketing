@@ -13,27 +13,19 @@ class TicketIncident extends Model
     use HasFactory;
 
     protected $fillable = [
-        'ticket_customer_id',
+        'ticket_id',
         'incident_number',
         'kendala_id',
         'reported_at',
-        'first_response_at',
     ];
 
     protected $casts = [
         'reported_at'       => 'datetime',
-        'first_response_at' => 'datetime',
     ];
 
-    /**
-     * Customer/site yang mengalami incident.
-     */
-    public function ticketCustomer(): BelongsTo
+    public function ticket(): BelongsTo
     {
-        return $this->belongsTo(
-            TicketCustomer::class,
-            'ticket_customer_id'
-        );
+        return $this->belongsTo(Ticket::class, 'ticket_id');
     }
 
     /**

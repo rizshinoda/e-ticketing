@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
+use Illuminate\Validation\ValidationException;
 
 class TicketController extends Controller
 {
@@ -298,62 +299,42 @@ class TicketController extends Controller
                 'created_by' => Auth::id(),
                 'reported_at' => $validated['reported_at'],
             ]);
-
             /*
-        |--------------------------------------------------------------------------
-        | 2. CREATE CUSTOMER / SITE
-        |--------------------------------------------------------------------------
-        */
+|--------------------------------------------------------------------------
+| 2. CREATE CUSTOMER / SITE
+|--------------------------------------------------------------------------
+*/
 
             foreach ($onlineBillings as $onlineBilling) {
 
-                $ticketCustomer = $ticket->customers()->create([
-                    /*
-                 * Referensi Online Billing
-                 */
+                $ticket->customers()->create([
                     'online_billing_id' => $onlineBilling->id,
 
-                    /*
-                 * Snapshot customer
-                 */
                     'customer_name' =>
                     $onlineBilling->pelanggan?->nama_pelanggan,
 
-                    /*
-                 * Snapshot site
-                 */
                     'site_name' =>
                     $onlineBilling->nama_site,
 
-                    /*
-                 * Snapshot nomor jaringan
-                 */
                     'no_jaringan' =>
                     $onlineBilling->no_jaringan,
 
-                    /*
-                 * Cara laporan
-                 */
                     'reported_via' =>
                     $validated['reported_via'] ?? null,
                 ]);
-
-                /*
-            |--------------------------------------------------------------------------
-            | 3. CREATE INCIDENT PERTAMA
-            |--------------------------------------------------------------------------
-            */
-
-                $ticketCustomer->incidents()->create([
-                    'incident_number' => 1,
-
-                    'kendala_id' =>
-                    $validated['kendala_id'],
-
-                    'reported_at' =>
-                    $validated['reported_at'],
-                ]);
             }
+
+            /*
+|--------------------------------------------------------------------------
+| 3. CREATE INCIDENT PERTAMA
+|--------------------------------------------------------------------------
+*/
+
+            $ticket->incidents()->create([
+                'incident_number' => 1,
+                'kendala_id' => $validated['kendala_id'],
+                'reported_at' => $validated['reported_at'],
+            ]);
 
             /*
         |--------------------------------------------------------------------------
@@ -402,7 +383,7 @@ class TicketController extends Controller
             'closer',
 
             'customers.onlineBilling',
-            'customers.incidents.category',
+            'incidents.category',
 
             'stopClocks',
             'rfos',
@@ -410,9 +391,17 @@ class TicketController extends Controller
             'updates.user',
             'updates.attachments',
         ]);
+        $categories = TicketCategory::query()
+            ->orderBy('name')
+            ->get([
+                'id',
+                'name',
+                'is_downtime',
+            ]);
 
         return Inertia::render('Tickets/Show', [
             'ticket' => $ticket,
+            'categories' => $categories,
         ]);
     }
 
@@ -713,6 +702,67 @@ class TicketController extends Controller
         return back()->with(
             'success',
             'Ticket berhasil di-resolve.'
+        );
+    }
+
+    public function reopen(Request $request, Ticket $ticket)
+    {
+        if ($ticket->status !== 'resolved') {
+            return back()->withErrors([
+                'reopen' => 'Ticket hanya dapat di-Re-Open ketika status Resolved.',
+            ]);
+        }
+
+        $validated = $request->validate([
+            'kendala_id' => [
+                'required',
+                'exists:ticket_categories,id',
+            ],
+            'reported_at' => [
+                'required',
+                'date',
+            ],
+            'reason' => [
+                'required',
+                'string',
+                'max:2000',
+            ],
+        ]);
+
+        DB::transaction(function () use ($ticket, $validated) {
+
+            // Ambil nomor incident terakhir pada ticket
+            $lastIncidentNumber = $ticket->incidents()
+                ->max('incident_number');
+
+            $nextIncidentNumber = ($lastIncidentNumber ?? 0) + 1;
+
+            // Buat incident baru
+            $ticket->incidents()->create([
+                'incident_number' => $nextIncidentNumber,
+                'kendala_id' => $validated['kendala_id'],
+                'reported_at' => $validated['reported_at'],
+            ]);
+
+            // Ticket kembali On Progress
+            // resolved_at dan resolved_by dikosongkan karena ticket
+            // sudah tidak berada dalam status Resolved
+            $ticket->update([
+                'status' => 'on_progress',
+                'resolved_at' => null,
+                'resolved_by' => null,
+            ]);
+
+            // Catat alasan Re-Open di update ticket
+            $ticket->updates()->create([
+                'user_id' => Auth::id(),
+                'message' => 'Ticket di-Re-Open. Alasan: ' . $validated['reason'],
+            ]);
+        });
+
+        return back()->with(
+            'success',
+            'Ticket berhasil di-Re-Open.'
         );
     }
 }

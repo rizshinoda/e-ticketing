@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Link, useForm, usePage } from '@inertiajs/vue3';
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 /*
 |--------------------------------------------------------------------------
 | Interfaces
@@ -45,12 +45,9 @@ interface Customer {
     site_name: string | null;
     no_jaringan: string | null;
     reported_via: string | null;
-
     online_billing: {
         id: number;
     } | null;
-
-    incidents: Incident[];
 }
 
 interface Attachment {
@@ -76,17 +73,17 @@ interface Ticket {
     description: string | null;
     priority: string;
     status: string;
-
     first_response_at: string | null;
     reported_at: string;
     resolved_at: string | null;
     downtime_minutes: number | null;
     closed_at: string | null;
-
     created_at: string;
-
     creator: User | null;
+
     customers: Customer[];
+    incidents: Incident[];
+
     stop_clocks: StopClock[];
     rfos: Rfo[];
     updates: Update[];
@@ -118,6 +115,7 @@ const groupedCustomers = computed(() => {
 });
 const props = defineProps<{
     ticket: Ticket;
+    categories: Category[];
 }>();
 const page = usePage<{
     flash: {
@@ -298,7 +296,33 @@ const stopClockForm = useForm<{
 }>({
     reason: '',
 });
+const showReopenForm = ref(false);
 
+const reopenForm = useForm({
+    kendala_id: null as number | null,
+    reported_at: new Date()
+        .toLocaleString('sv-SE', {
+            timeZone: 'Asia/Jakarta',
+        })
+        .replace(' ', 'T')
+        .slice(0, 16),
+    reason: '',
+});
+
+const openReopenForm = () => {
+    showReopenForm.value = true;
+};
+
+const submitReopen = () => {
+    reopenForm.post(`/tickets/${props.ticket.id}/reopen`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            reopenForm.reset();
+            showReopenForm.value = false;
+        },
+    });
+};
 /*
 |--------------------------------------------------------------------------
 | Cancel Stop Clock
@@ -503,53 +527,6 @@ const hasActiveStopClock = () => {
                                             {{ customer.reported_via || '-' }}
                                         </div>
                                     </div>
-
-                                    <!-- INCIDENTS -->
-                                    <div class="mt-4 space-y-3">
-                                        <div
-                                            v-for="incident in customer.incidents"
-                                            :key="incident.id"
-                                            class="rounded-md border bg-background p-4"
-                                        >
-                                            <!-- Incident Header -->
-                                            <div
-                                                class="mb-3 flex items-center justify-between"
-                                            >
-                                                <div class="font-medium">
-                                                    Incident #{{
-                                                        incident.incident_number
-                                                    }}
-                                                </div>
-
-                                                <span
-                                                    class="rounded-md bg-muted px-2 py-1 text-xs"
-                                                >
-                                                    {{ incident.category.name }}
-                                                </span>
-                                            </div>
-
-                                            <!-- Incident Times -->
-                                            <div
-                                                class="grid gap-3 text-sm md:grid-cols-2"
-                                            >
-                                                <div>
-                                                    <div
-                                                        class="text-xs text-muted-foreground"
-                                                    >
-                                                        Reported
-                                                    </div>
-
-                                                    <div>
-                                                        {{
-                                                            formatDate(
-                                                                incident.reported_at,
-                                                            )
-                                                        }}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -748,7 +725,58 @@ const hasActiveStopClock = () => {
                         Belum ada riwayat Stop Clock.
                     </div>
                 </div>
+                <!-- =================================================
+     INCIDENTS
+================================================== -->
 
+                <div class="rounded-lg border p-5">
+                    <div class="mb-4 flex items-center justify-between">
+                        <h2 class="font-semibold">Incident</h2>
+
+                        <span class="text-sm text-muted-foreground">
+                            {{ ticket.incidents.length }} incident
+                        </span>
+                    </div>
+
+                    <div v-if="ticket.incidents.length" class="space-y-3">
+                        <div
+                            v-for="incident in ticket.incidents"
+                            :key="incident.id"
+                            class="rounded-md bg-muted/40 p-4"
+                        >
+                            <!-- Incident Header -->
+                            <div class="mb-3 flex items-center justify-between">
+                                <div class="font-medium">
+                                    Incident #{{ incident.incident_number }}
+                                </div>
+
+                                <span
+                                    class="rounded-md bg-muted px-2 py-1 text-xs"
+                                >
+                                    {{ incident.category.name }}
+                                </span>
+                            </div>
+
+                            <!-- Incident Reported -->
+                            <div class="text-sm">
+                                <div class="text-xs text-muted-foreground">
+                                    Reported
+                                </div>
+
+                                <div>
+                                    {{ formatDate(incident.reported_at) }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div
+                        v-else
+                        class="py-4 text-center text-sm text-muted-foreground"
+                    >
+                        Belum ada incident.
+                    </div>
+                </div>
                 <!-- =================================================
                      RFO
                 ================================================== -->
@@ -1086,6 +1114,93 @@ const hasActiveStopClock = () => {
                         >
                             Resolve Ticket
                         </button>
+
+                        <!-- Re-Open -->
+                        <button
+                            v-if="ticket.status === 'resolved'"
+                            type="button"
+                            class="w-full rounded-md bg-orange-600 px-4 py-2 text-sm text-white"
+                            @click="openReopenForm"
+                        >
+                            Re-Open Ticket
+                        </button>
+                        <div
+                            v-if="showReopenForm"
+                            class="mt-4 rounded-md border p-4"
+                        >
+                            <div class="mb-4 font-medium">Re-Open Ticket</div>
+
+                            <div class="space-y-4">
+                                <div>
+                                    <label
+                                        class="mb-1 block text-sm font-medium"
+                                    >
+                                        Kendala Baru
+                                    </label>
+
+                                    <select
+                                        v-model="reopenForm.kendala_id"
+                                        class="w-full rounded-md border px-3 py-2 text-sm"
+                                    >
+                                        <option value="">Pilih Kendala</option>
+
+                                        <option
+                                            v-for="category in categories"
+                                            :key="category.id"
+                                            :value="category.id"
+                                        >
+                                            {{ category.name }}
+                                        </option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label
+                                        class="mb-1 block text-sm font-medium"
+                                    >
+                                        Waktu Gangguan
+                                    </label>
+
+                                    <input
+                                        v-model="reopenForm.reported_at"
+                                        type="datetime-local"
+                                        class="w-full rounded-md border px-3 py-2 text-sm"
+                                    />
+                                </div>
+                                <div>
+                                    <label
+                                        class="mb-1 block text-sm font-medium"
+                                    >
+                                        Alasan
+                                    </label>
+
+                                    <textarea
+                                        v-model="reopenForm.reason"
+                                        rows="3"
+                                        class="w-full rounded-md border px-3 py-2 text-sm"
+                                        placeholder="Jelaskan alasan Re-Open..."
+                                    ></textarea>
+                                </div>
+
+                                <div class="flex gap-2">
+                                    <button
+                                        type="button"
+                                        class="rounded-md border px-4 py-2 text-sm"
+                                        @click="showReopenForm = false"
+                                    >
+                                        Batal
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        class="rounded-md bg-orange-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+                                        :disabled="reopenForm.processing"
+                                        @click="submitReopen"
+                                    >
+                                        Re-Open
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
