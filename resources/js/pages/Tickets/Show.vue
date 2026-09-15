@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Link, useForm, usePage } from '@inertiajs/vue3';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 /*
 |--------------------------------------------------------------------------
 | Interfaces
@@ -29,7 +29,12 @@ interface Rfo {
     id: number;
     rfo_number: string;
     content: string;
+    created_by: number;
     created_at: string;
+    creator: {
+        id: number;
+        name: string;
+    };
 }
 
 interface Incident {
@@ -250,7 +255,41 @@ const updateForm = useForm<{
     message: '',
     attachments: [],
 });
+const rfoForm = useForm({
+    content: '',
+});
+const showRfoForm = ref(false);
+const submitRfo = () => {
+    rfoForm.post(`/tickets/${props.ticket.id}/rfo`, {
+        preserveScroll: true,
+        onSuccess: () => {
+            rfoForm.reset();
+            showRfoForm.value = false;
+        },
+    });
+};
+const editingRfoId = ref<number | null>(null);
 
+const editRfoForm = useForm({
+    content: '',
+});
+const startEditRfo = (rfo: Rfo) => {
+    editingRfoId.value = rfo.id;
+    editRfoForm.content = rfo.content;
+};
+const cancelEditRfo = () => {
+    editingRfoId.value = null;
+    editRfoForm.reset();
+};
+const submitEditRfo = (rfo: Rfo) => {
+    editRfoForm.put(`/tickets/${props.ticket.id}/rfo/${rfo.id}`, {
+        preserveScroll: true,
+        onSuccess: () => {
+            editingRfoId.value = null;
+            editRfoForm.reset();
+        },
+    });
+};
 /*
 |--------------------------------------------------------------------------
 | Handle Files
@@ -296,6 +335,7 @@ const stopClockForm = useForm<{
 }>({
     reason: '',
 });
+const showStopClockForm = ref(false);
 const showReopenForm = ref(false);
 
 const reopenForm = useForm({
@@ -377,6 +417,16 @@ const resolveTicket = () => {
         },
     });
 };
+
+const closeTicket = () => {
+    useForm({}).post(`/tickets/${props.ticket.id}/close`, {
+        preserveScroll: true,
+
+        onError: (errors) => {
+            console.log('CLOSE ERRORS:', errors);
+        },
+    });
+};
 /*
 |--------------------------------------------------------------------------
 | Check Active Stop Clock
@@ -388,23 +438,121 @@ const hasActiveStopClock = () => {
         (stopClock) => stopClock.ended_at === null,
     );
 };
+
+const showSuccess = ref(false);
+const showResolveError = ref(false);
+const showCloseError = ref(false);
+
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+const startToastTimer = () => {
+    if (toastTimer) {
+        clearTimeout(toastTimer);
+    }
+
+    toastTimer = setTimeout(() => {
+        showSuccess.value = false;
+        showResolveError.value = false;
+        showCloseError.value = false;
+    }, 3000);
+};
+
+watch(
+    () => page.props.flash.success,
+    (message) => {
+        if (!message) {
+            return;
+        }
+
+        showSuccess.value = true;
+        startToastTimer();
+    },
+    { immediate: true },
+);
+
+watch(
+    () => page.props.errors.resolve,
+    (message) => {
+        if (!message) {
+            return;
+        }
+
+        showResolveError.value = true;
+        startToastTimer();
+    },
+    { immediate: true },
+);
+
+watch(
+    () => page.props.errors.close,
+    (message) => {
+        if (!message) {
+            return;
+        }
+
+        showCloseError.value = true;
+        startToastTimer();
+    },
+    { immediate: true },
+);
 </script>
 
 <template>
     <!-- =====================================================
          FLASH MESSAGE
     ====================================================== -->
+    <!-- SUCCESS TOAST -->
     <div
-        v-if="page.props.flash.success"
-        class="mb-4 rounded-md bg-green-100 px-4 py-3 text-sm text-green-700"
+        v-if="showSuccess && page.props.flash.success"
+        class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 shadow-lg"
     >
-        {{ page.props.flash.success }}
+        <div class="flex-1">
+            {{ page.props.flash.success }}
+        </div>
+
+        <button
+            type="button"
+            class="text-lg leading-none text-green-500 hover:text-green-700"
+            @click="showSuccess = false"
+        >
+            ×
+        </button>
     </div>
+
+    <!-- RESOLVE ERROR TOAST -->
     <div
-        v-if="page.props.errors.resolve"
-        class="mb-3 rounded-md bg-red-100 px-4 py-3 text-sm text-red-700"
+        v-if="showResolveError && page.props.errors.resolve"
+        class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
     >
-        {{ page.props.errors.resolve }}
+        <div class="flex-1">
+            {{ page.props.errors.resolve }}
+        </div>
+
+        <button
+            type="button"
+            class="text-lg leading-none text-red-500 hover:text-red-700"
+            @click="showResolveError = false"
+        >
+            ×
+        </button>
+    </div>
+
+    <!-- CLOSE ERROR TOAST -->
+    <div
+        v-if="showCloseError && page.props.errors.close"
+        class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
+    >
+        <div class="flex-1">
+            {{ page.props.errors.close }}
+        </div>
+
+        <button
+            type="button"
+            class="text-lg leading-none text-red-500 hover:text-red-700"
+            @click="showCloseError = false"
+        >
+            ×
+        </button>
     </div>
     <div class="p-6">
         <!-- =====================================================
@@ -539,202 +687,16 @@ const hasActiveStopClock = () => {
                         Tidak ada customer/site.
                     </div>
                 </div>
-
-                <!-- =================================================
-                     STOP CLOCK - TICKET LEVEL
-                ================================================== -->
-                <div class="rounded-lg border p-5">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <h2 class="font-semibold">Stop Clock</h2>
-
-                            <div
-                                v-if="hasActiveStopClock()"
-                                class="mt-1 text-xs text-yellow-600 dark:text-yellow-400"
-                            >
-                                SLA sedang dihentikan
-                            </div>
-
-                            <div
-                                v-else
-                                class="mt-1 text-xs text-muted-foreground"
-                            >
-                                SLA berjalan
-                            </div>
-                        </div>
-
-                        <!-- Start Stop Clock -->
-                        <button
-                            v-if="
-                                !hasActiveStopClock() &&
-                                ticket.status === 'on_progress'
-                            "
-                            type="button"
-                            class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
-                            @click="stopClockForm.reason = ''"
-                        >
-                            Stop Clock
-                        </button>
-
-                        <!-- Resume Stop Clock -->
-                        <button
-                            v-else-if="hasActiveStopClock()"
-                            type="button"
-                            class="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
-                            :disabled="stopClockForm.processing"
-                            @click="resumeStopClock"
-                        >
-                            {{
-                                stopClockForm.processing
-                                    ? 'Memproses...'
-                                    : 'Resume Clock'
-                            }}
-                        </button>
-                    </div>
-
-                    <!-- =================================================
-                         STOP CLOCK FORM
-                    ================================================== -->
-                    <div
-                        v-if="
-                            ticket.status === 'on_progress' &&
-                            !hasActiveStopClock()
-                        "
-                        class="mt-3 rounded-md border bg-background p-4"
-                    >
-                        <form
-                            class="space-y-3"
-                            @submit.prevent="submitStopClock"
-                        >
-                            <div>
-                                <label class="mb-2 block text-sm font-medium">
-                                    Alasan Stop Clock
-                                </label>
-
-                                <textarea
-                                    v-model="stopClockForm.reason"
-                                    rows="3"
-                                    class="w-full rounded-md border px-3 py-2 text-sm"
-                                    placeholder="Contoh: Menunggu customer melakukan pengecekan power CPE..."
-                                ></textarea>
-
-                                <p
-                                    v-if="stopClockForm.errors.reason"
-                                    class="mt-1 text-sm text-destructive"
-                                >
-                                    {{ stopClockForm.errors.reason }}
-                                </p>
-                            </div>
-
-                            <div class="flex justify-end gap-2">
-                                <button
-                                    type="button"
-                                    class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
-                                    :disabled="stopClockForm.processing"
-                                    @click="cancelStopClockForm"
-                                >
-                                    Batal
-                                </button>
-
-                                <button
-                                    type="submit"
-                                    class="rounded-md bg-yellow-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-                                    :disabled="
-                                        stopClockForm.processing ||
-                                        !stopClockForm.reason.trim()
-                                    "
-                                >
-                                    {{
-                                        stopClockForm.processing
-                                            ? 'Menyimpan...'
-                                            : 'Mulai Stop Clock'
-                                    }}
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-
-                    <!-- =================================================
-                         STOP CLOCK HISTORY
-                    ================================================== -->
-                    <div
-                        v-if="ticket.stop_clocks.length"
-                        class="mt-4 space-y-2"
-                    >
-                        <div class="text-xs font-medium text-muted-foreground">
-                            Riwayat Stop Clock
-                        </div>
-
-                        <div
-                            v-for="stopClock in ticket.stop_clocks"
-                            :key="stopClock.id"
-                            class="rounded-md border bg-background p-3 text-xs"
-                        >
-                            <!-- Time -->
-                            <div class="grid gap-2 sm:grid-cols-2">
-                                <div>
-                                    <span class="text-muted-foreground">
-                                        Mulai:
-                                    </span>
-
-                                    <span class="ml-1">
-                                        {{ formatDate(stopClock.started_at) }}
-                                    </span>
-                                </div>
-
-                                <div>
-                                    <span class="text-muted-foreground">
-                                        Selesai:
-                                    </span>
-
-                                    <span class="ml-1">
-                                        {{
-                                            stopClock.ended_at
-                                                ? formatDate(stopClock.ended_at)
-                                                : '-'
-                                        }}
-                                    </span>
-                                </div>
-                            </div>
-
-                            <!-- Reason -->
-                            <div class="mt-2">
-                                <span class="text-muted-foreground">
-                                    Reason:
-                                </span>
-
-                                <span class="ml-1">
-                                    {{ stopClock.reason }}
-                                </span>
-                            </div>
-
-                            <!-- Active Indicator -->
-                            <div
-                                v-if="stopClock.ended_at === null"
-                                class="mt-2 font-medium text-yellow-600 dark:text-yellow-400"
-                            >
-                                ⏸ Sedang aktif
-                            </div>
-                        </div>
-                    </div>
-
-                    <div
-                        v-else
-                        class="mt-4 py-4 text-center text-sm text-muted-foreground"
-                    >
-                        Belum ada riwayat Stop Clock.
-                    </div>
-                </div>
                 <!-- =================================================
      INCIDENTS
 ================================================== -->
 
                 <div class="rounded-lg border p-5">
                     <div class="mb-4 flex items-center justify-between">
-                        <h2 class="font-semibold">Incident</h2>
+                        <h2 class="font-semibold">Case</h2>
 
                         <span class="text-sm text-muted-foreground">
-                            {{ ticket.incidents.length }} incident
+                            {{ ticket.incidents.length }} Case
                         </span>
                     </div>
 
@@ -747,7 +709,7 @@ const hasActiveStopClock = () => {
                             <!-- Incident Header -->
                             <div class="mb-3 flex items-center justify-between">
                                 <div class="font-medium">
-                                    Incident #{{ incident.incident_number }}
+                                    Case #{{ incident.incident_number }}
                                 </div>
 
                                 <span
@@ -778,47 +740,394 @@ const hasActiveStopClock = () => {
                     </div>
                 </div>
                 <!-- =================================================
-                     RFO
-                ================================================== -->
-                <div class="rounded-lg border p-5">
-                    <div class="mb-4 flex items-center justify-between">
-                        <h2 class="font-semibold">RFO</h2>
+     STOP CLOCK - TICKET LEVEL
+================================================== -->
 
-                        <span class="text-xs text-muted-foreground">
-                            {{ ticket.rfos.length }} RFO
-                        </span>
+                <div class="rounded-lg border p-5">
+                    <!-- =================================================
+         STOP CLOCK HEADER
+    ================================================== -->
+
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="font-semibold">Stop Clock</h2>
+
+                            <div
+                                v-if="hasActiveStopClock()"
+                                class="mt-1 text-xs text-yellow-600 dark:text-yellow-400"
+                            >
+                                SLA sedang dihentikan
+                            </div>
+
+                            <div
+                                v-else
+                                class="mt-1 text-xs text-muted-foreground"
+                            >
+                                SLA berjalan
+                            </div>
+                        </div>
+
+                        <!-- =================================================
+             ACTION BUTTON
+        ================================================== -->
+
+                        <div class="flex items-center gap-2">
+                            <!-- Start Stop Clock -->
+                            <button
+                                v-if="
+                                    !hasActiveStopClock() &&
+                                    ticket.status === 'on_progress'
+                                "
+                                type="button"
+                                class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
+                                @click="
+                                    showStopClockForm = !showStopClockForm;
+
+                                    if (showStopClockForm) {
+                                        stopClockForm.reason = '';
+                                    }
+                                "
+                            >
+                                {{
+                                    showStopClockForm
+                                        ? 'Tutup Form'
+                                        : 'Stop Clock'
+                                }}
+                            </button>
+
+                            <!-- Resume Stop Clock -->
+                            <button
+                                v-else-if="hasActiveStopClock()"
+                                type="button"
+                                class="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50"
+                                :disabled="stopClockForm.processing"
+                                @click="resumeStopClock"
+                            >
+                                {{
+                                    stopClockForm.processing
+                                        ? 'Memproses...'
+                                        : 'Resume Clock'
+                                }}
+                            </button>
+                        </div>
                     </div>
 
-                    <div v-if="ticket.rfos.length" class="space-y-3">
-                        <div
-                            v-for="rfo in ticket.rfos"
-                            :key="rfo.id"
-                            class="rounded-md border p-4"
+                    <!-- =================================================
+         STOP CLOCK FORM
+    ================================================== -->
+
+                    <div
+                        v-if="
+                            showStopClockForm &&
+                            ticket.status === 'on_progress' &&
+                            !hasActiveStopClock()
+                        "
+                        class="mt-3 rounded-md border bg-background p-4"
+                    >
+                        <form
+                            class="space-y-3"
+                            @submit.prevent="submitStopClock"
                         >
-                            <div class="flex items-center justify-between">
-                                <div class="font-medium">
-                                    {{ rfo.rfo_number }}
+                            <!-- Reason -->
+                            <div>
+                                <label class="mb-2 block text-sm font-medium">
+                                    Alasan Stop Clock
+                                </label>
+
+                                <textarea
+                                    v-model="stopClockForm.reason"
+                                    rows="3"
+                                    class="w-full rounded-md border px-3 py-2 text-sm"
+                                    placeholder="Contoh: Menunggu customer melakukan pengecekan power CPE..."
+                                ></textarea>
+
+                                <p
+                                    v-if="stopClockForm.errors.reason"
+                                    class="mt-1 text-sm text-destructive"
+                                >
+                                    {{ stopClockForm.errors.reason }}
+                                </p>
+                            </div>
+
+                            <!-- Form Action -->
+                            <div class="flex justify-end gap-2">
+                                <!-- Batal -->
+                                <button
+                                    type="button"
+                                    class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
+                                    :disabled="stopClockForm.processing"
+                                    @click="cancelStopClockForm"
+                                >
+                                    Batal
+                                </button>
+
+                                <!-- Mulai Stop Clock -->
+                                <button
+                                    type="submit"
+                                    class="rounded-md bg-yellow-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                                    :disabled="
+                                        stopClockForm.processing ||
+                                        !stopClockForm.reason.trim()
+                                    "
+                                >
+                                    {{
+                                        stopClockForm.processing
+                                            ? 'Menyimpan...'
+                                            : 'Mulai Stop Clock'
+                                    }}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- =================================================
+         STOP CLOCK HISTORY
+    ================================================== -->
+
+                    <div
+                        v-if="ticket.stop_clocks.length"
+                        class="mt-4 space-y-2"
+                    >
+                        <div class="text-xs font-medium text-muted-foreground">
+                            Riwayat Stop Clock
+                        </div>
+
+                        <div
+                            v-for="stopClock in ticket.stop_clocks"
+                            :key="stopClock.id"
+                            class="rounded-md border bg-background p-3 text-xs"
+                        >
+                            <!-- =================================================
+                 TIME
+            ================================================== -->
+
+                            <div class="grid gap-2 sm:grid-cols-2">
+                                <div>
+                                    <span class="text-muted-foreground">
+                                        Mulai:
+                                    </span>
+
+                                    <span class="ml-1">
+                                        {{ formatDate(stopClock.started_at) }}
+                                    </span>
                                 </div>
 
-                                <div class="text-xs text-muted-foreground">
-                                    {{ formatDate(rfo.created_at) }}
+                                <div>
+                                    <span class="text-muted-foreground">
+                                        Selesai:
+                                    </span>
+
+                                    <span class="ml-1">
+                                        {{
+                                            stopClock.ended_at
+                                                ? formatDate(stopClock.ended_at)
+                                                : '-'
+                                        }}
+                                    </span>
                                 </div>
                             </div>
 
-                            <div class="mt-3 text-sm whitespace-pre-wrap">
-                                {{ rfo.content }}
+                            <!-- =================================================
+                 REASON
+            ================================================== -->
+
+                            <div class="mt-2">
+                                <span class="text-muted-foreground">
+                                    Reason:
+                                </span>
+
+                                <span class="ml-1">
+                                    {{ stopClock.reason }}
+                                </span>
+                            </div>
+
+                            <!-- =================================================
+                 ACTIVE INDICATOR
+            ================================================== -->
+
+                            <div
+                                v-if="stopClock.ended_at === null"
+                                class="mt-2 font-medium text-yellow-600 dark:text-yellow-400"
+                            >
+                                ⏸ Sedang aktif
                             </div>
                         </div>
                     </div>
 
+                    <!-- =================================================
+         EMPTY HISTORY
+    ================================================== -->
+
                     <div
                         v-else
-                        class="py-4 text-center text-sm text-muted-foreground"
+                        class="mt-4 py-4 text-center text-sm text-muted-foreground"
                     >
-                        Belum ada RFO.
+                        Belum ada riwayat Stop Clock.
                     </div>
                 </div>
 
+                <!-- =================================================
+     RFO
+================================================== -->
+
+                <div class="rounded-lg border p-5">
+                    <div class="mb-4">
+                        <h2 class="font-semibold">RFO</h2>
+
+                        <p class="mt-1 text-sm text-muted-foreground">
+                            Root Cause &amp; Resolution ticket.
+                        </p>
+                    </div>
+
+                    <!-- FORM BUAT RFO -->
+                    <div v-if="ticket.status === 'resolved'">
+                        <button
+                            type="button"
+                            class="rounded-md border px-4 py-2 text-sm font-medium"
+                            @click="showRfoForm = !showRfoForm"
+                        >
+                            {{ showRfoForm ? 'Tutup Form RFO' : 'Buat RFO' }}
+                        </button>
+
+                        <form
+                            v-if="showRfoForm"
+                            @submit.prevent="submitRfo"
+                            class="mt-4 space-y-4"
+                        >
+                            <div>
+                                <label class="mb-1 block text-sm font-medium">
+                                    Isi RFO
+                                </label>
+
+                                <textarea
+                                    v-model="rfoForm.content"
+                                    rows="8"
+                                    class="w-full rounded-md border px-3 py-2 text-sm"
+                                    placeholder="Tuliskan root cause, tindakan penyelesaian, dan preventive action..."
+                                ></textarea>
+
+                                <div
+                                    v-if="rfoForm.errors.content"
+                                    class="mt-1 text-sm text-red-600"
+                                >
+                                    {{ rfoForm.errors.content }}
+                                </div>
+                            </div>
+
+                            <button
+                                type="submit"
+                                class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                                :disabled="rfoForm.processing"
+                            >
+                                {{
+                                    rfoForm.processing
+                                        ? 'Menyimpan...'
+                                        : 'Simpan RFO'
+                                }}
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- RFO YANG SUDAH TERSIMPAN -->
+                    <div class="mt-6">
+                        <div v-if="ticket.rfos.length" class="space-y-4">
+                            <div
+                                v-for="rfo in ticket.rfos"
+                                :key="rfo.id"
+                                class="rounded-md bg-muted/40 p-4"
+                            >
+                                <div
+                                    class="mb-3 flex items-center justify-between"
+                                >
+                                    <div class="font-medium">
+                                        {{ rfo.rfo_number }}
+                                    </div>
+
+                                    <div class="text-xs text-muted-foreground">
+                                        {{ formatDate(rfo.created_at) }}
+                                    </div>
+                                    <button
+                                        v-if="
+                                            ticket.status === 'resolved' &&
+                                            editingRfoId !== rfo.id
+                                        "
+                                        type="button"
+                                        class="rounded-md border px-2 py-1 text-xs hover:bg-muted"
+                                        @click="startEditRfo(rfo)"
+                                    >
+                                        Edit
+                                    </button>
+                                </div>
+
+                                <div class="mb-3 text-sm">
+                                    <span class="text-muted-foreground">
+                                        Dibuat oleh:
+                                    </span>
+
+                                    {{ rfo.creator.name }}
+                                </div>
+
+                                <!-- Tampilan normal -->
+                                <div
+                                    v-if="editingRfoId !== rfo.id"
+                                    class="text-sm whitespace-pre-line"
+                                >
+                                    {{ rfo.content }}
+                                </div>
+
+                                <!-- Form Edit -->
+                                <div v-else class="space-y-3">
+                                    <textarea
+                                        v-model="editRfoForm.content"
+                                        rows="8"
+                                        class="w-full rounded-md border px-3 py-2 text-sm"
+                                    ></textarea>
+
+                                    <div
+                                        v-if="editRfoForm.errors.content"
+                                        class="text-sm text-red-600"
+                                    >
+                                        {{ editRfoForm.errors.content }}
+                                    </div>
+
+                                    <div class="flex justify-end gap-2">
+                                        <button
+                                            type="button"
+                                            class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
+                                            :disabled="editRfoForm.processing"
+                                            @click="cancelEditRfo"
+                                        >
+                                            Batal
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                                            :disabled="
+                                                editRfoForm.processing ||
+                                                !editRfoForm.content.trim()
+                                            "
+                                            @click="submitEditRfo(rfo)"
+                                        >
+                                            {{
+                                                editRfoForm.processing
+                                                    ? 'Menyimpan...'
+                                                    : 'Simpan Perubahan'
+                                            }}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div
+                            v-else
+                            class="rounded-md bg-muted/40 p-4 text-center text-sm text-muted-foreground"
+                        >
+                            Belum ada RFO.
+                        </div>
+                    </div>
+                </div>
                 <!-- =================================================
                      ACTIVITY / PROGRESS
                 ================================================== -->
@@ -1114,7 +1423,14 @@ const hasActiveStopClock = () => {
                         >
                             Resolve Ticket
                         </button>
-
+                        <button
+                            v-if="ticket.status === 'resolved'"
+                            type="button"
+                            class="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                            @click="closeTicket"
+                        >
+                            Close Ticket
+                        </button>
                         <!-- Re-Open -->
                         <button
                             v-if="ticket.status === 'resolved'"
@@ -1124,6 +1440,7 @@ const hasActiveStopClock = () => {
                         >
                             Re-Open Ticket
                         </button>
+
                         <div
                             v-if="showReopenForm"
                             class="mt-4 rounded-md border p-4"

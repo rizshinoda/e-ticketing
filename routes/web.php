@@ -61,6 +61,18 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 TicketController::class,
                 'reopen',
             ])->name('reopen');
+            Route::post('/{ticket}/rfo', [
+                TicketController::class,
+                'storeRfo',
+            ])->name('rfo.store');
+            Route::put('/{ticket}/rfo/{rfo}', [
+                TicketController::class,
+                'updateRfo',
+            ])->name('rfo.update');
+            Route::post('/{ticket}/close', [
+                TicketController::class,
+                'close',
+            ])->name('close');
         });
     Route::prefix('master')
         ->name('master.')

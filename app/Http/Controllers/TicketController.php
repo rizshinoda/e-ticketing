@@ -3,15 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Models\OnlineBilling;
+use App\Models\Rfo;
 use App\Models\Ticket;
 use App\Models\TicketCategory;
 use App\Models\TicketIncident;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
-use Illuminate\Validation\ValidationException;
 
 class TicketController extends Controller
 {
@@ -386,7 +387,7 @@ class TicketController extends Controller
             'incidents.category',
 
             'stopClocks',
-            'rfos',
+            'rfos.creator',
 
             'updates.user',
             'updates.attachments',
@@ -601,7 +602,10 @@ class TicketController extends Controller
             'reason' => $validated['reason'],
             'started_by' => Auth::id(),
         ]);
-
+        $ticket->updates()->create([
+            'user_id' => Auth::id(),
+            'message' => 'Stop Clock dimulai. Alasan: ' . $validated['reason'],
+        ]);
         return back()->with(
             'success',
             'Stop Clock berhasil dimulai.'
@@ -640,23 +644,25 @@ class TicketController extends Controller
             'ended_at' => now(),
             'ended_by' => Auth::id(),
         ]);
-
+        $ticket->updates()->create([
+            'user_id' => Auth::id(),
+            'message' => 'Stop Clock dihentikan.',
+        ]);
         return back()->with(
             'success',
             'Stop Clock berhasil dihentikan.'
         );
     }
-
     public function resolve(Ticket $ticket)
     {
-        // 1. Ticket harus berstatus on_progress
+        // Ticket hanya boleh di-resolve ketika On Progress
         if ($ticket->status !== 'on_progress') {
             return back()->withErrors([
                 'resolve' => 'Ticket hanya dapat di-resolve ketika status On Progress.',
             ]);
         }
 
-        // 2. Tidak boleh ada Stop Clock yang masih aktif
+        // Pastikan tidak ada Stop Clock yang masih aktif
         $activeStopClock = $ticket->stopClocks()
             ->whereNull('ended_at')
             ->exists();
@@ -667,12 +673,64 @@ class TicketController extends Controller
             ]);
         }
 
-        // 3. Tentukan waktu resolve
+        // Ambil incident terakhir beserta kategori kendalanya
+        $latestIncident = $ticket->incidents()
+            ->with('category')
+            ->latest('incident_number')
+            ->first();
+
+        if (!$latestIncident) {
+            return back()->withErrors([
+                'resolve' => 'Ticket tidak memiliki incident.',
+            ]);
+        }
+
         $resolvedAt = now();
 
-        // 4. Hitung total Stop Clock
+        /*
+     * ==========================================================
+     * CEK APAKAH INCIDENT MASUK PERHITUNGAN DOWNTIME / SLA
+     * ==========================================================
+     *
+     * is_downtime = true
+     * → waktu dihitung sebagai downtime
+     *
+     * is_downtime = false
+     * → waktu tidak dihitung sebagai downtime
+     */
+
+        if (!$latestIncident->category->is_downtime) {
+
+            DB::transaction(function () use ($ticket, $resolvedAt) {
+
+                $ticket->update([
+                    'status' => 'resolved',
+                    'resolved_by' => Auth::id(),
+                    'resolved_at' => $resolvedAt,
+                ]);
+
+                $ticket->updates()->create([
+                    'user_id' => Auth::id(),
+                    'message' => 'Ticket berhasil di-Resolve.',
+                ]);
+            });
+
+            return back()->with(
+                'success',
+                'Ticket berhasil di-resolve.'
+            );
+        }
+
+        /*
+     * ==========================================================
+     * INCIDENT MERUPAKAN DOWNTIME
+     * ==========================================================
+     */
+
+        // Hitung total Stop Clock yang terjadi sejak incident terakhir
         $totalStopClockMinutes = $ticket->stopClocks()
             ->whereNotNull('ended_at')
+            ->where('started_at', '>=', $latestIncident->reported_at)
             ->get()
             ->sum(function ($stopClock) {
                 return $stopClock->started_at->diffInMinutes(
@@ -680,24 +738,40 @@ class TicketController extends Controller
                 );
             });
 
-        // 5. Hitung total waktu gangguan
-        $totalMinutes = $ticket->reported_at->diffInMinutes(
+        // Hitung total durasi sejak incident terakhir dilaporkan
+        $totalMinutes = $latestIncident->reported_at->diffInMinutes(
             $resolvedAt
         );
 
-        // 6. Kurangi waktu Stop Clock
-        $downtimeMinutes = max(
+        // Kurangi waktu Stop Clock dari total durasi gangguan
+        $currentDowntimeMinutes = max(
             0,
             $totalMinutes - $totalStopClockMinutes
         );
 
-        // 7. Simpan hasil resolve
-        $ticket->update([
-            'status' => 'resolved',
-            'resolved_by' => Auth::id(),
-            'resolved_at' => $resolvedAt,
-            'downtime_minutes' => $downtimeMinutes,
-        ]);
+        // Tambahkan downtime periode ini ke downtime sebelumnya
+        $totalDowntimeMinutes =
+            ($ticket->downtime_minutes ?? 0)
+            + $currentDowntimeMinutes;
+
+        DB::transaction(function () use (
+            $ticket,
+            $resolvedAt,
+            $totalDowntimeMinutes
+        ) {
+
+            $ticket->update([
+                'status' => 'resolved',
+                'resolved_by' => Auth::id(),
+                'resolved_at' => $resolvedAt,
+                'downtime_minutes' => $totalDowntimeMinutes,
+            ]);
+
+            $ticket->updates()->create([
+                'user_id' => Auth::id(),
+                'message' => 'Ticket berhasil di-Resolve.',
+            ]);
+        });
 
         return back()->with(
             'success',
@@ -763,6 +837,125 @@ class TicketController extends Controller
         return back()->with(
             'success',
             'Ticket berhasil di-Re-Open.'
+        );
+    }
+
+    public function storeRfo(Request $request, Ticket $ticket)
+    {
+        if ($ticket->status !== 'resolved') {
+            return back()->withErrors([
+                'rfo' => 'RFO hanya dapat dibuat ketika ticket sudah Resolved.',
+            ]);
+        }
+
+        $validated = $request->validate([
+            'content' => [
+                'required',
+                'string',
+            ],
+        ]);
+
+        DB::transaction(function () use ($ticket, $validated) {
+
+            $rfoNumber = 'RFO-' . now()->format('YmdHis') . '-' . $ticket->id;
+
+            $ticket->rfos()->create([
+                'rfo_number' => $rfoNumber,
+                'content' => $validated['content'],
+                'created_by' => Auth::id(),
+            ]);
+
+            $ticket->updates()->create([
+                'user_id' => Auth::id(),
+                'message' => 'RFO dibuat dengan nomor ' . $rfoNumber . '.',
+            ]);
+        });
+
+        return back()->with(
+            'success',
+            'RFO berhasil dibuat.'
+        );
+    }
+    public function updateRfo(
+        Request $request,
+        Ticket $ticket,
+        Rfo $rfo
+    ) {
+        if ($ticket->status !== 'resolved') {
+            return back()->withErrors([
+                'rfo' => 'RFO hanya dapat diedit ketika ticket masih Resolved.',
+            ]);
+        }
+
+        if ($rfo->ticket_id !== $ticket->id) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'content' => [
+                'required',
+                'string',
+            ],
+        ]);
+
+        DB::transaction(function () use ($ticket, $rfo, $validated) {
+
+            $rfo->update([
+                'content' => $validated['content'],
+            ]);
+
+            $ticket->updates()->create([
+                'user_id' => Auth::id(),
+                'message' => 'RFO ' . $rfo->rfo_number . ' diperbarui.',
+            ]);
+        });
+
+        return back()->with(
+            'success',
+            'RFO berhasil diperbarui.'
+        );
+    }
+
+    public function close(Ticket $ticket)
+    {
+        if ($ticket->status !== 'resolved') {
+            return back()->withErrors([
+                'close' => 'Ticket hanya dapat di-Close ketika status Resolved.',
+            ]);
+        }
+
+        $activeStopClock = $ticket->stopClocks()
+            ->whereNull('ended_at')
+            ->exists();
+
+        if ($activeStopClock) {
+            return back()->withErrors([
+                'close' => 'Ticket tidak dapat di-Close karena masih ada Stop Clock yang aktif.',
+            ]);
+        }
+
+        if (!$ticket->rfos()->exists()) {
+            return back()->withErrors([
+                'close' => 'Ticket tidak dapat di-Close karena belum memiliki RFO.',
+            ]);
+        }
+
+        $closedAt = now();
+
+        $ticket->update([
+            'status' => 'closed',
+            'closed_by' => Auth::id(),
+            'closed_at' => $closedAt,
+        ]);
+
+        $ticket->updates()->create([
+            'user_id' => Auth::id(),
+            'message' => 'Ticket berhasil di-Close.',
+        ]);
+
+        return back()->with(
+            'success',
+            'Ticket berhasil di-Close.'
         );
     }
 }

@@ -25,6 +25,7 @@ class Ticket extends Model
         'resolved_at',
         'downtime_minutes',
         'closed_at',
+        'resolution',
     ];
 
     protected $casts = [

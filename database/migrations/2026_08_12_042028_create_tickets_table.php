@@ -49,7 +49,7 @@ return new class extends Migration
                 'resolved',
                 'closed',
             ])->default('open');
-
+            $table->string('resolution')->nullable();
             /*
      * User yang membuat ticket
      * sekaligus menangani ticket.
