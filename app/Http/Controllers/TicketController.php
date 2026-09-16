@@ -653,8 +653,13 @@ class TicketController extends Controller
             'Stop Clock berhasil dihentikan.'
         );
     }
-    public function resolve(Ticket $ticket)
+    public function resolve(Request $request, Ticket $ticket)
     {
+        // Validasi resolution
+        $validated = $request->validate([
+            'resolution' => ['required', 'in:provider_issue,no_issue'],
+        ]);
+
         // Ticket hanya boleh di-resolve ketika On Progress
         if ($ticket->status !== 'on_progress') {
             return back()->withErrors([
@@ -689,22 +694,36 @@ class TicketController extends Controller
 
         /*
      * ==========================================================
-     * CEK APAKAH INCIDENT MASUK PERHITUNGAN DOWNTIME / SLA
+     * TENTUKAN APAKAH DOWNTIME PERLU DIHITUNG
      * ==========================================================
      *
-     * is_downtime = true
-     * → waktu dihitung sebagai downtime
+     * Downtime hanya dihitung jika:
      *
-     * is_downtime = false
-     * → waktu tidak dihitung sebagai downtime
+     * 1. Resolution = provider_issue
+     * 2. Category = is_downtime true
+     *
+     * Jika:
+     *
+     * - Resolution = no_issue
+     * - Category = is_downtime false
+     *
+     * maka waktu ticket tidak dihitung sebagai downtime.
      */
 
-        if (!$latestIncident->category->is_downtime) {
+        if (
+            $validated['resolution'] === 'no_issue' ||
+            !$latestIncident->category->is_downtime
+        ) {
 
-            DB::transaction(function () use ($ticket, $resolvedAt) {
+            DB::transaction(function () use (
+                $ticket,
+                $resolvedAt,
+                $validated
+            ) {
 
                 $ticket->update([
                     'status' => 'resolved',
+                    'resolution' => $validated['resolution'],
                     'resolved_by' => Auth::id(),
                     'resolved_at' => $resolvedAt,
                 ]);
@@ -723,16 +742,29 @@ class TicketController extends Controller
 
         /*
      * ==========================================================
-     * INCIDENT MERUPAKAN DOWNTIME
+     * INCIDENT MERUPAKAN DOWNTIME PROVIDER
      * ==========================================================
+     *
+     * Sampai di sini berarti:
+     *
+     * resolution = provider_issue
+     * dan
+     * category.is_downtime = true
+     *
+     * Maka downtime dihitung.
      */
 
         // Hitung total Stop Clock yang terjadi sejak incident terakhir
         $totalStopClockMinutes = $ticket->stopClocks()
             ->whereNotNull('ended_at')
-            ->where('started_at', '>=', $latestIncident->reported_at)
+            ->where(
+                'started_at',
+                '>=',
+                $latestIncident->reported_at
+            )
             ->get()
             ->sum(function ($stopClock) {
+
                 return $stopClock->started_at->diffInMinutes(
                     $stopClock->ended_at
                 );
@@ -757,11 +789,13 @@ class TicketController extends Controller
         DB::transaction(function () use (
             $ticket,
             $resolvedAt,
-            $totalDowntimeMinutes
+            $totalDowntimeMinutes,
+            $validated
         ) {
 
             $ticket->update([
                 'status' => 'resolved',
+                'resolution' => $validated['resolution'],
                 'resolved_by' => Auth::id(),
                 'resolved_at' => $resolvedAt,
                 'downtime_minutes' => $totalDowntimeMinutes,

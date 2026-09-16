@@ -407,17 +407,31 @@ const resumeStopClock = () => {
 | Resolve Ticket
 |--------------------------------------------------------------------------
 */
+const showResolveForm = ref(false);
 
-const resolveTicket = () => {
-    useForm({}).post(`/tickets/${props.ticket.id}/resolve`, {
+const resolveForm = useForm({
+    resolution: '',
+});
+
+const openResolveForm = () => {
+    resolveForm.reset();
+    showResolveForm.value = true;
+};
+
+const cancelResolveForm = () => {
+    resolveForm.reset();
+    showResolveForm.value = false;
+};
+
+const submitResolve = () => {
+    resolveForm.post(`/tickets/${props.ticket.id}/resolve`, {
         preserveScroll: true,
-
-        onError: (errors) => {
-            console.log('RESOLVE ERRORS:', errors);
+        onSuccess: () => {
+            resolveForm.reset();
+            showResolveForm.value = false;
         },
     });
 };
-
 const closeTicket = () => {
     useForm({}).post(`/tickets/${props.ticket.id}/close`, {
         preserveScroll: true,
@@ -1415,14 +1429,71 @@ watch(
 
                     <div class="space-y-2">
                         <!-- Resolve -->
+                        <!-- Resolve -->
                         <button
                             v-if="ticket.status === 'on_progress'"
                             type="button"
-                            class="w-full rounded-md bg-green-600 px-4 py-2 text-sm text-white disabled:opacity-50"
-                            @click="resolveTicket"
+                            class="w-full rounded-md bg-green-600 px-4 py-2 text-sm text-white"
+                            @click="openResolveForm"
                         >
                             Resolve Ticket
                         </button>
+
+                        <div
+                            v-if="showResolveForm"
+                            class="mt-4 rounded-md border p-4"
+                        >
+                            <div class="mb-4 font-medium">Resolve Ticket</div>
+
+                            <div class="space-y-4">
+                                <div>
+                                    <label
+                                        class="mb-1 block text-sm font-medium"
+                                    >
+                                        Hasil Penyelesaian
+                                    </label>
+
+                                    <select
+                                        v-model="resolveForm.resolution"
+                                        class="w-full rounded-md border px-3 py-2 text-sm"
+                                    >
+                                        <option value="">
+                                            Pilih Hasil Penyelesaian
+                                        </option>
+
+                                        <option value="provider_issue">
+                                            Provider Issue
+                                        </option>
+
+                                        <option value="no_issue">
+                                            No Issue
+                                        </option>
+                                    </select>
+                                </div>
+
+                                <div class="flex gap-2">
+                                    <button
+                                        type="button"
+                                        class="rounded-md border px-4 py-2 text-sm"
+                                        @click="cancelResolveForm"
+                                    >
+                                        Batal
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        class="rounded-md bg-green-600 px-4 py-2 text-sm text-white disabled:opacity-50"
+                                        :disabled="
+                                            resolveForm.processing ||
+                                            !resolveForm.resolution
+                                        "
+                                        @click="submitResolve"
+                                    >
+                                        Resolve
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                         <button
                             v-if="ticket.status === 'resolved'"
                             type="button"
