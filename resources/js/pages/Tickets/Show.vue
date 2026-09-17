@@ -41,6 +41,8 @@ interface Incident {
     id: number;
     incident_number: number;
     reported_at: string;
+    resolved_at: string | null;
+
     category: Category;
 }
 
@@ -707,7 +709,7 @@ watch(
 
                 <div class="rounded-lg border p-5">
                     <div class="mb-4 flex items-center justify-between">
-                        <h2 class="font-semibold">Case</h2>
+                        <h2 class="font-semibold">Case / Insiden</h2>
 
                         <span class="text-sm text-muted-foreground">
                             {{ ticket.incidents.length }} Case
@@ -734,13 +736,33 @@ watch(
                             </div>
 
                             <!-- Incident Reported -->
-                            <div class="text-sm">
-                                <div class="text-xs text-muted-foreground">
-                                    Reported
+                            <div class="grid grid-cols-2 gap-4 text-sm">
+                                <!-- Reported -->
+                                <div>
+                                    <div class="text-xs text-muted-foreground">
+                                        Dilaporkan
+                                    </div>
+
+                                    <div>
+                                        {{ formatDate(incident.reported_at) }}
+                                    </div>
                                 </div>
 
+                                <!-- Resolved -->
                                 <div>
-                                    {{ formatDate(incident.reported_at) }}
+                                    <div class="text-xs text-muted-foreground">
+                                        Diselesaikan
+                                    </div>
+
+                                    <div>
+                                        {{
+                                            incident.resolved_at
+                                                ? formatDate(
+                                                      incident.resolved_at,
+                                                  )
+                                                : '-'
+                                        }}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1263,20 +1285,20 @@ watch(
                         </div>
 
                         <!-- Reported -->
-                        <div>
+                        <!-- <div>
                             <div class="text-xs text-muted-foreground">
-                                Reported
+                                Laporan Diterima
                             </div>
 
                             <div>
                                 {{ formatDate(ticket.reported_at) }}
                             </div>
-                        </div>
+                        </div> -->
 
                         <!-- First Response -->
                         <div>
                             <div class="text-xs text-muted-foreground">
-                                First Response
+                                Respon Pertama
                             </div>
 
                             <div>
@@ -1287,7 +1309,7 @@ watch(
                         <!-- Downtime -->
                         <div>
                             <div class="text-xs text-muted-foreground">
-                                Downtime
+                                Waktu Down
                             </div>
 
                             <div>
@@ -1296,20 +1318,20 @@ watch(
                         </div>
 
                         <!-- Resolved -->
-                        <div>
+                        <!-- <div>
                             <div class="text-xs text-muted-foreground">
-                                Resolved
+                                Diselesaikan
                             </div>
 
                             <div>
                                 {{ formatDate(ticket.resolved_at) }}
                             </div>
-                        </div>
+                        </div> -->
 
                         <!-- Closed -->
                         <div>
                             <div class="text-xs text-muted-foreground">
-                                Closed
+                                Ditutup/Close
                             </div>
 
                             <div>
@@ -1504,7 +1526,7 @@ watch(
                         </button>
                         <!-- Re-Open -->
                         <button
-                            v-if="ticket.status === 'resolved'"
+                            v-if="ticket.status === 'closed'"
                             type="button"
                             class="w-full rounded-md bg-orange-600 px-4 py-2 text-sm text-white"
                             @click="openReopenForm"

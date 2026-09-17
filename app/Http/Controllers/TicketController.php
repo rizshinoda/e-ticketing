@@ -208,7 +208,23 @@ class TicketController extends Controller
                 'required',
                 'date',
             ],
+            'report_type' => [
+                'required',
+                'in:current,historical',
+            ],
 
+            'incident_reported_at' => [
+                'required_if:report_type,historical',
+                'nullable',
+                'date',
+            ],
+
+            'incident_resolved_at' => [
+                'required_if:report_type,historical',
+                'nullable',
+                'date',
+                'after:incident_reported_at',
+            ],
             'description' => [
                 'required',
                 'string',
@@ -334,7 +350,14 @@ class TicketController extends Controller
             $ticket->incidents()->create([
                 'incident_number' => 1,
                 'kendala_id' => $validated['kendala_id'],
-                'reported_at' => $validated['reported_at'],
+
+                'reported_at' => $validated['report_type'] === 'historical'
+                    ? $validated['incident_reported_at']
+                    : $validated['reported_at'],
+
+                'resolved_at' => $validated['report_type'] === 'historical'
+                    ? $validated['incident_resolved_at']
+                    : null,
             ]);
 
             /*
@@ -657,7 +680,10 @@ class TicketController extends Controller
     {
         // Validasi resolution
         $validated = $request->validate([
-            'resolution' => ['required', 'in:provider_issue,no_issue'],
+            'resolution' => [
+                'required',
+                'in:provider_issue,no_issue',
+            ],
         ]);
 
         // Ticket hanya boleh di-resolve ketika On Progress
@@ -690,11 +716,27 @@ class TicketController extends Controller
             ]);
         }
 
+        /*
+     * Waktu Ticket di-Resolve
+     */
         $resolvedAt = now();
 
         /*
+     * Tentukan waktu selesai Incident.
+     *
+     * Current:
+     * resolved_at masih NULL
+     * → gunakan waktu sekarang.
+     *
+     * Historical:
+     * resolved_at sudah ada
+     * → gunakan waktu historical tersebut.
+     */
+        $incidentResolvedAt = $latestIncident->resolved_at ?? $resolvedAt;
+
+        /*
      * ==========================================================
-     * TENTUKAN APAKAH DOWNTIME PERLU DIHITUNG
+     * TENTUKAN APAKAH DOWNTIME DIHITUNG
      * ==========================================================
      *
      * Downtime hanya dihitung jika:
@@ -707,20 +749,31 @@ class TicketController extends Controller
      * - Resolution = no_issue
      * - Category = is_downtime false
      *
-     * maka waktu ticket tidak dihitung sebagai downtime.
+     * maka downtime tidak bertambah.
      */
-
         if (
             $validated['resolution'] === 'no_issue' ||
             !$latestIncident->category->is_downtime
         ) {
-
             DB::transaction(function () use (
                 $ticket,
+                $latestIncident,
+                $incidentResolvedAt,
                 $resolvedAt,
                 $validated
             ) {
+                /*
+             * Untuk historical:
+             * resolved_at yang sudah ada tetap dipertahankan.
+             *
+             * Untuk current:
+             * resolved_at diisi dengan waktu sekarang.
+             */
+                $latestIncident->update([
+                    'resolved_at' => $incidentResolvedAt,
+                ]);
 
+                // Update Ticket
                 $ticket->update([
                     'status' => 'resolved',
                     'resolution' => $validated['resolution'],
@@ -728,6 +781,7 @@ class TicketController extends Controller
                     'resolved_at' => $resolvedAt,
                 ]);
 
+                // Catat Activity
                 $ticket->updates()->create([
                     'user_id' => Auth::id(),
                     'message' => 'Ticket berhasil di-Resolve.',
@@ -742,20 +796,17 @@ class TicketController extends Controller
 
         /*
      * ==========================================================
-     * INCIDENT MERUPAKAN DOWNTIME PROVIDER
+     * INCIDENT = PROVIDER ISSUE + DOWNTIME
      * ==========================================================
-     *
-     * Sampai di sini berarti:
-     *
-     * resolution = provider_issue
-     * dan
-     * category.is_downtime = true
-     *
-     * Maka downtime dihitung.
      */
 
-        // Hitung total Stop Clock yang terjadi sejak incident terakhir
-        $totalStopClockMinutes = $ticket->stopClocks()
+        /*
+     * Hitung Stop Clock dalam satuan DETIK.
+     *
+     * Kita tidak langsung menggunakan diffInMinutes()
+     * agar detik tidak hilang pada setiap periode Stop Clock.
+     */
+        $totalStopClockSeconds = $ticket->stopClocks()
             ->whereNotNull('ended_at')
             ->where(
                 'started_at',
@@ -764,35 +815,71 @@ class TicketController extends Controller
             )
             ->get()
             ->sum(function ($stopClock) {
-
-                return $stopClock->started_at->diffInMinutes(
+                return $stopClock->started_at->diffInSeconds(
                     $stopClock->ended_at
                 );
             });
 
-        // Hitung total durasi sejak incident terakhir dilaporkan
-        $totalMinutes = $latestIncident->reported_at->diffInMinutes(
-            $resolvedAt
+        /*
+     * Hitung total durasi Incident dalam DETIK.
+     *
+     * Current:
+     * Incident mulai → waktu Resolve
+     *
+     * Historical:
+     * Incident mulai → waktu Incident selesai
+     */
+        $totalIncidentSeconds = $latestIncident->reported_at->diffInSeconds(
+            $incidentResolvedAt
         );
 
-        // Kurangi waktu Stop Clock dari total durasi gangguan
-        $currentDowntimeMinutes = max(
+        /*
+     * Kurangi waktu Stop Clock.
+     */
+        $currentDowntimeSeconds = max(
             0,
-            $totalMinutes - $totalStopClockMinutes
+            $totalIncidentSeconds - $totalStopClockSeconds
         );
 
-        // Tambahkan downtime periode ini ke downtime sebelumnya
+        /*
+     * Konversi hasil akhir ke menit.
+     *
+     * Dibulatkan ke menit terdekat.
+     */
+        $currentDowntimeMinutes = intdiv(
+            $currentDowntimeSeconds,
+            60
+        );
+        /*
+     * Tambahkan downtime periode ini
+     * ke downtime sebelumnya.
+     */
         $totalDowntimeMinutes =
             ($ticket->downtime_minutes ?? 0)
             + $currentDowntimeMinutes;
 
         DB::transaction(function () use (
             $ticket,
+            $latestIncident,
+            $incidentResolvedAt,
             $resolvedAt,
             $totalDowntimeMinutes,
             $validated
         ) {
+            /*
+         * Simpan resolved_at Incident.
+         *
+         * Historical:
+         * tetap menggunakan waktu historical.
+         *
+         * Current:
+         * menggunakan waktu Resolve.
+         */
+            $latestIncident->update([
+                'resolved_at' => $incidentResolvedAt,
+            ]);
 
+            // Update Ticket
             $ticket->update([
                 'status' => 'resolved',
                 'resolution' => $validated['resolution'],
@@ -801,6 +888,7 @@ class TicketController extends Controller
                 'downtime_minutes' => $totalDowntimeMinutes,
             ]);
 
+            // Catat Activity
             $ticket->updates()->create([
                 'user_id' => Auth::id(),
                 'message' => 'Ticket berhasil di-Resolve.',
@@ -812,15 +900,16 @@ class TicketController extends Controller
             'Ticket berhasil di-resolve.'
         );
     }
-
     public function reopen(Request $request, Ticket $ticket)
     {
-        if ($ticket->status !== 'resolved') {
+        // Re-Open hanya boleh dilakukan ketika ticket sudah Closed
+        if ($ticket->status !== 'closed') {
             return back()->withErrors([
-                'reopen' => 'Ticket hanya dapat di-Re-Open ketika status Resolved.',
+                'reopen' => 'Ticket hanya dapat di-Re-Open ketika status Closed.',
             ]);
         }
 
+        // Validasi data Re-Open
         $validated = $request->validate([
             'kendala_id' => [
                 'required',
@@ -852,16 +941,21 @@ class TicketController extends Controller
                 'reported_at' => $validated['reported_at'],
             ]);
 
-            // Ticket kembali On Progress
-            // resolved_at dan resolved_by dikosongkan karena ticket
-            // sudah tidak berada dalam status Resolved
+            // Ticket kembali ke On Progress
+            //
+            // Data Resolved dan Closed dikosongkan
+            // karena ticket sudah dibuka kembali.
             $ticket->update([
                 'status' => 'on_progress',
+
                 'resolved_at' => null,
                 'resolved_by' => null,
+
+                'closed_at' => null,
+                'closed_by' => null,
             ]);
 
-            // Catat alasan Re-Open di update ticket
+            // Catat aktivitas Re-Open
             $ticket->updates()->create([
                 'user_id' => Auth::id(),
                 'message' => 'Ticket di-Re-Open. Alasan: ' . $validated['reason'],

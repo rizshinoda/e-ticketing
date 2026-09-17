@@ -17,10 +17,13 @@ class TicketIncident extends Model
         'incident_number',
         'kendala_id',
         'reported_at',
+        'resolved_at',
+
     ];
 
     protected $casts = [
         'reported_at'       => 'datetime',
+        'resolved_at'       => 'datetime',
     ];
 
     public function ticket(): BelongsTo

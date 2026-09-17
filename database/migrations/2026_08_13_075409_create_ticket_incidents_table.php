@@ -22,7 +22,7 @@ return new class extends Migration
                 ->restrictOnDelete();
 
             $table->timestamp('reported_at');
-
+            $table->timestamp('resolved_at')->nullable();
 
 
             $table->timestamps();

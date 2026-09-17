@@ -64,15 +64,39 @@ const form = useForm({
 
     priority: 'medium',
 
+    // current = gangguan yang sedang terjadi
+    // historical = gangguan yang sudah terjadi sebelumnya
+    report_type: 'current',
+
     reported_at: new Date()
         .toLocaleString('sv-SE', {
             timeZone: 'Asia/Jakarta',
         })
         .replace(' ', 'T')
         .slice(0, 16),
+
+    // Waktu kejadian incident
+    incident_reported_at: new Date()
+        .toLocaleString('sv-SE', {
+            timeZone: 'Asia/Jakarta',
+        })
+        .replace(' ', 'T')
+        .slice(0, 16),
+
+    incident_resolved_at: null as string | null,
+
     description: '',
 });
+const incidentReportedAt = ref(
+    new Date()
+        .toLocaleString('sv-SE', {
+            timeZone: 'Asia/Jakarta',
+        })
+        .replace(' ', 'T')
+        .slice(0, 16),
+);
 
+const incidentResolvedAt = ref<string | null>(null);
 /*
 |--------------------------------------------------------------------------
 | Debounce Search
@@ -242,7 +266,12 @@ watch(
 
 const submit = () => {
     form.post('/tickets', {
-        preserveScroll: true,
+        onError: (errors) => {
+            console.log('ERROR:', errors);
+        },
+        onSuccess: () => {
+            console.log('SUCCESS');
+        },
     });
 };
 </script>
@@ -289,7 +318,50 @@ const submit = () => {
                     site.
                 </p>
             </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium">
+                    Jenis Laporan
+                </label>
 
+                <select
+                    v-model="form.report_type"
+                    class="w-full rounded-md border px-3 py-2 text-sm"
+                >
+                    <option value="current">Gangguan Saat Ini</option>
+
+                    <option value="historical">Gangguan Sebelumnya</option>
+                </select>
+            </div>
+            <div
+                v-if="form.report_type === 'historical'"
+                class="space-y-4 rounded-md border p-4"
+            >
+                <div class="font-medium">Waktu Gangguan</div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-medium">
+                        Gangguan Mulai
+                    </label>
+
+                    <input
+                        v-model="form.incident_reported_at"
+                        type="datetime-local"
+                        class="w-full rounded-md border px-3 py-2 text-sm"
+                    />
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-medium">
+                        Gangguan Selesai
+                    </label>
+
+                    <input
+                        v-model="form.incident_resolved_at"
+                        type="datetime-local"
+                        class="w-full rounded-md border px-3 py-2 text-sm"
+                    />
+                </div>
+            </div>
             <!-- ======================================
                  SEARCH ONLINE BILLING
             ======================================= -->
