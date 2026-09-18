@@ -95,7 +95,12 @@ interface Ticket {
     rfos: Rfo[];
     updates: Update[];
 }
-
+interface AvailableSite {
+    id: number;
+    pelanggan_id: number;
+    nama_site: string | null;
+    no_jaringan: string | null;
+}
 /*
 |--------------------------------------------------------------------------
 | Props
@@ -123,12 +128,70 @@ const groupedCustomers = computed(() => {
 const props = defineProps<{
     ticket: Ticket;
     categories: Category[];
+    availableSites: AvailableSite[];
 }>();
 const page = usePage<{
     flash: {
         success?: string;
     };
 }>();
+
+const showAddSiteForm = ref(false);
+
+const addSiteForm = useForm({
+    online_billing_id: null as number | null,
+});
+
+const siteSearch = ref('');
+const showSiteResults = ref(false);
+const filteredSites = computed(() => {
+    const search = siteSearch.value.toLowerCase().trim();
+
+    if (!search) {
+        return props.availableSites;
+    }
+
+    return props.availableSites.filter((site) => {
+        return (
+            site.nama_site?.toLowerCase().includes(search) ||
+            site.no_jaringan?.toLowerCase().includes(search)
+        );
+    });
+});
+const selectSite = (site: AvailableSite) => {
+    addSiteForm.online_billing_id = site.id;
+
+    siteSearch.value = `${site.nama_site || '-'} - ${site.no_jaringan || '-'}`;
+
+    showSiteResults.value = false;
+};
+const openAddSiteForm = () => {
+    addSiteForm.reset();
+    siteSearch.value = '';
+    showSiteResults.value = false;
+    showAddSiteForm.value = true;
+};
+
+const cancelAddSiteForm = () => {
+    addSiteForm.reset();
+    siteSearch.value = '';
+    showSiteResults.value = false;
+    showAddSiteForm.value = false;
+};
+const submitAddSite = () => {
+    if (!addSiteForm.online_billing_id) {
+        return;
+    }
+
+    addSiteForm.post(`/tickets/${props.ticket.id}/sites`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            addSiteForm.reset();
+            showAddSiteForm.value = false;
+        },
+    });
+};
 /*
 |--------------------------------------------------------------------------
 | Format Date
@@ -648,8 +711,114 @@ watch(
                             {{ ticket.customers.length }}
                             site
                         </span>
+                        <button
+                            v-if="ticket.ticket_type === 'gamas'"
+                            type="button"
+                            class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50"
+                            @click="openAddSiteForm"
+                        >
+                            + Tambah Site
+                        </button>
                     </div>
+                    <div
+                        v-if="showAddSiteForm"
+                        class="mb-4 rounded-lg border p-4"
+                    >
+                        <div class="mb-3">
+                            <h3 class="font-medium">Tambah Site</h3>
 
+                            <p class="text-sm text-muted-foreground">
+                                Cari site yang akan ditambahkan ke ticket GAMAS.
+                            </p>
+                        </div>
+
+                        <div class="relative">
+                            <label class="mb-1 block text-sm font-medium">
+                                Site
+                            </label>
+
+                            <input
+                                v-model="siteSearch"
+                                type="text"
+                                placeholder="Cari nama site atau no jaringan..."
+                                class="w-full rounded-md border px-3 py-2 text-sm"
+                                @focus="showSiteResults = true"
+                            />
+
+                            <!-- HASIL PENCARIAN -->
+                            <div
+                                v-if="showSiteResults && filteredSites.length"
+                                class="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border bg-background shadow-lg"
+                            >
+                                <button
+                                    v-for="site in filteredSites"
+                                    :key="site.id"
+                                    type="button"
+                                    class="block w-full border-b px-3 py-3 text-left hover:bg-muted"
+                                    @click="selectSite(site)"
+                                >
+                                    <div class="text-sm font-medium">
+                                        {{ site.nama_site || '-' }}
+                                    </div>
+
+                                    <div class="text-xs text-muted-foreground">
+                                        No Jaringan:
+                                        {{ site.no_jaringan || '-' }}
+                                    </div>
+                                </button>
+                            </div>
+
+                            <!-- TIDAK ADA HASIL -->
+                            <div
+                                v-if="
+                                    showSiteResults &&
+                                    siteSearch &&
+                                    filteredSites.length === 0
+                                "
+                                class="absolute z-50 mt-1 w-full rounded-md border bg-background p-3 text-sm text-muted-foreground shadow-lg"
+                            >
+                                Site tidak ditemukan.
+                            </div>
+                        </div>
+
+                        <!-- SITE YANG DIPILIH -->
+                        <div
+                            v-if="addSiteForm.online_billing_id"
+                            class="mt-3 rounded-md bg-muted/40 p-3"
+                        >
+                            <div class="text-sm font-medium">Site dipilih</div>
+
+                            <div class="mt-1 text-sm">
+                                {{ siteSearch }}
+                            </div>
+                        </div>
+
+                        <div class="mt-4 flex gap-2">
+                            <button
+                                type="button"
+                                class="rounded-md border px-4 py-2 text-sm"
+                                @click="cancelAddSiteForm"
+                            >
+                                Batal
+                            </button>
+
+                            <button
+                                type="button"
+                                class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50"
+                                :disabled="
+                                    !addSiteForm.online_billing_id ||
+                                    addSiteForm.processing
+                                "
+                                @click="submitAddSite"
+                            >
+                                {{
+                                    addSiteForm.processing
+                                        ? 'Menyimpan...'
+                                        : 'Tambah Site'
+                                }}
+                            </button>
+                        </div>
+                    </div>
                     <div v-if="ticket.customers.length" class="space-y-4">
                         <!-- GROUP CUSTOMER -->
                         <div

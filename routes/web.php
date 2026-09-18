@@ -73,6 +73,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 TicketController::class,
                 'close',
             ])->name('close');
+            Route::post('/{ticket}/sites', [
+                TicketController::class,
+                'addGamasSite',
+            ])->name('sites.store');
+            Route::post('/{ticket}/sites', [
+                TicketController::class,
+                'addSite',
+            ])->name('sites.add');
         });
     Route::prefix('master')
         ->name('master.')

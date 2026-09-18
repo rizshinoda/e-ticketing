@@ -405,16 +405,14 @@ class TicketController extends Controller
             'creator',
             'resolver',
             'closer',
-
             'customers.onlineBilling',
             'incidents.category',
-
             'stopClocks',
             'rfos.creator',
-
             'updates.user',
             'updates.attachments',
         ]);
+
         $categories = TicketCategory::query()
             ->orderBy('name')
             ->get([
@@ -423,9 +421,60 @@ class TicketController extends Controller
                 'is_downtime',
             ]);
 
+        /*
+    |--------------------------------------------------------------------------
+    | Site yang tersedia untuk GAMAS
+    |--------------------------------------------------------------------------
+    */
+
+        $availableSites = collect();
+
+        if ($ticket->ticket_type === 'gamas') {
+
+            // Ambil pelanggan dari site pertama GAMAS
+            $firstCustomer = $ticket->customers->first();
+
+            if ($firstCustomer?->onlineBilling?->pelanggan_id) {
+
+                $pelangganId =
+                    $firstCustomer->onlineBilling->pelanggan_id;
+
+                /*
+             * Ambil semua Online Billing aktif
+             * milik pelanggan tersebut.
+             */
+                $availableSites = OnlineBilling::query()
+                    ->with('pelanggan')
+                    ->where('status', 'active')
+                    ->where('pelanggan_id', $pelangganId)
+                    ->orderBy('nama_site')
+                    ->get([
+                        'id',
+                        'pelanggan_id',
+                        'nama_site',
+                        'no_jaringan',
+                    ]);
+
+                /*
+             * Jangan tampilkan site yang sudah
+             * ada di ticket GAMAS.
+             */
+                $existingOnlineBillingIds =
+                    $ticket->customers
+                    ->pluck('online_billing_id')
+                    ->filter()
+                    ->values();
+
+                $availableSites = $availableSites
+                    ->whereNotIn('id', $existingOnlineBillingIds)
+                    ->values();
+            }
+        }
+
         return Inertia::render('Tickets/Show', [
             'ticket' => $ticket,
             'categories' => $categories,
+            'availableSites' => $availableSites,
         ]);
     }
 
@@ -1084,6 +1133,172 @@ class TicketController extends Controller
         return back()->with(
             'success',
             'Ticket berhasil di-Close.'
+        );
+    }
+
+    public function addGamasSite(Request $request, Ticket $ticket)
+    {
+        $validated = $request->validate([
+            'online_billing_id' => [
+                'required',
+                'integer',
+                'exists:online_billings,id',
+            ],
+        ]);
+
+        // Pastikan ticket adalah GAMAS
+        if ($ticket->ticket_type !== 'gamas') {
+            return back()->withErrors([
+                'site' => 'Site tambahan hanya dapat ditambahkan ke ticket GAMAS.',
+            ]);
+        }
+
+        // Ambil Online Billing yang dipilih
+        $onlineBilling = OnlineBilling::query()
+            ->with('pelanggan')
+            ->where('status', 'active')
+            ->find($validated['online_billing_id']);
+
+        if (!$onlineBilling) {
+            return back()->withErrors([
+                'site' => 'Online Billing tidak ditemukan atau sudah tidak aktif.',
+            ]);
+        }
+
+        // Pastikan GAMAS sudah memiliki customer/site
+        $existingCustomer = $ticket->customers()->first();
+
+        if (!$existingCustomer) {
+            return back()->withErrors([
+                'site' => 'Ticket GAMAS belum memiliki pelanggan.',
+            ]);
+        }
+
+        /*
+     * Pastikan pelanggan site baru
+     * sama dengan pelanggan GAMAS.
+     */
+        if (
+            $onlineBilling->pelanggan_id !==
+            $existingCustomer->onlineBilling?->pelanggan_id
+        ) {
+            return back()->withErrors([
+                'site' => 'Site yang ditambahkan harus berasal dari pelanggan yang sama dengan GAMAS.',
+            ]);
+        }
+
+        // Pastikan site belum ada di ticket
+        $alreadyExists = $ticket->customers()
+            ->where('online_billing_id', $onlineBilling->id)
+            ->exists();
+
+        if ($alreadyExists) {
+            return back()->withErrors([
+                'site' => 'Site tersebut sudah ada di ticket GAMAS.',
+            ]);
+        }
+
+        DB::transaction(function () use ($ticket, $onlineBilling) {
+
+            // Tambahkan site ke GAMAS
+            $ticket->customers()->create([
+                'online_billing_id' => $onlineBilling->id,
+                'customer_name' => $onlineBilling->pelanggan?->nama_pelanggan,
+                'site_name' => $onlineBilling->nama_site,
+                'no_jaringan' => $onlineBilling->no_jaringan,
+                'reported_via' => null,
+            ]);
+
+            // Catat Activity
+            $ticket->updates()->create([
+                'user_id' => Auth::id(),
+                'message' => 'Site "' . $onlineBilling->nama_site . '" ditambahkan ke GAMAS.',
+            ]);
+        });
+
+        return back()->with(
+            'success',
+            'Site berhasil ditambahkan ke GAMAS.'
+        );
+    }
+    public function addSite(Request $request, Ticket $ticket)
+    {
+        $validated = $request->validate([
+            'online_billing_id' => [
+                'required',
+                'integer',
+                'exists:online_billings,id',
+            ],
+        ]);
+
+        // Pastikan ticket adalah GAMAS
+        if ($ticket->ticket_type !== 'gamas') {
+            return back()->withErrors([
+                'online_billing_id' =>
+                'Site hanya dapat ditambahkan ke ticket GAMAS.',
+            ]);
+        }
+
+        // Ambil site yang dipilih
+        $onlineBilling = OnlineBilling::query()
+            ->with('pelanggan')
+            ->where('status', 'active')
+            ->findOrFail($validated['online_billing_id']);
+
+        // Ambil customer dari site pertama yang sudah ada
+        $existingCustomer = $ticket->customers()
+            ->with('onlineBilling')
+            ->first();
+
+        if (!$existingCustomer?->onlineBilling) {
+            return back()->withErrors([
+                'online_billing_id' =>
+                'Customer utama ticket GAMAS tidak ditemukan.',
+            ]);
+        }
+
+        // Pastikan site berasal dari customer yang sama
+        if (
+            $onlineBilling->pelanggan_id !==
+            $existingCustomer->onlineBilling->pelanggan_id
+        ) {
+            return back()->withErrors([
+                'online_billing_id' =>
+                'Site harus berasal dari customer yang sama dengan ticket GAMAS.',
+            ]);
+        }
+
+        // Pastikan site belum ada di ticket
+        $alreadyExists = $ticket->customers()
+            ->where('online_billing_id', $onlineBilling->id)
+            ->exists();
+
+        if ($alreadyExists) {
+            return back()->withErrors([
+                'online_billing_id' =>
+                'Site tersebut sudah ada di ticket.',
+            ]);
+        }
+
+        $ticket->customers()->create([
+            'online_billing_id' => $onlineBilling->id,
+            'customer_name' => $onlineBilling->pelanggan?->nama_pelanggan,
+            'site_name' => $onlineBilling->nama_site,
+            'no_jaringan' => $onlineBilling->no_jaringan,
+            'reported_via' => null,
+        ]);
+
+        // Catat ke Activity
+        $ticket->updates()->create([
+            'user_id' => Auth::id(),
+            'message' =>
+            'Site ditambahkan ke ticket: ' .
+                ($onlineBilling->nama_site ?? '-'),
+        ]);
+
+        return back()->with(
+            'success',
+            'Site berhasil ditambahkan ke ticket.'
         );
     }
 }
