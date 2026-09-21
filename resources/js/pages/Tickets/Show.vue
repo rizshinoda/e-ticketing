@@ -139,9 +139,15 @@ const page = usePage<{
 const showAddSiteForm = ref(false);
 
 const addSiteForm = useForm({
-    online_billing_id: null as number | null,
-});
+    source: 'online_billing' as 'online_billing' | 'manual',
 
+    online_billing_id: null as number | null,
+
+    site_name: '',
+
+    no_jaringan: '',
+    reported_via: '',
+});
 const siteSearch = ref('');
 const showSiteResults = ref(false);
 const filteredSites = computed(() => {
@@ -161,14 +167,23 @@ const filteredSites = computed(() => {
 const selectSite = (site: AvailableSite) => {
     addSiteForm.online_billing_id = site.id;
 
+    addSiteForm.site_name = '';
+
+    addSiteForm.no_jaringan = '';
+
     siteSearch.value = `${site.nama_site || '-'} - ${site.no_jaringan || '-'}`;
 
     showSiteResults.value = false;
 };
 const openAddSiteForm = () => {
     addSiteForm.reset();
+
+    addSiteForm.source = 'online_billing';
+
     siteSearch.value = '';
+
     showSiteResults.value = false;
+
     showAddSiteForm.value = true;
 };
 
@@ -179,7 +194,14 @@ const cancelAddSiteForm = () => {
     showAddSiteForm.value = false;
 };
 const submitAddSite = () => {
-    if (!addSiteForm.online_billing_id) {
+    if (
+        addSiteForm.source === 'online_billing' &&
+        !addSiteForm.online_billing_id
+    ) {
+        return;
+    }
+
+    if (addSiteForm.source === 'manual' && !addSiteForm.site_name) {
         return;
     }
 
@@ -188,7 +210,16 @@ const submitAddSite = () => {
 
         onSuccess: () => {
             addSiteForm.reset();
+
+            addSiteForm.source = 'online_billing';
+
             showAddSiteForm.value = false;
+            siteSearch.value = '';
+            showSiteResults.value = false;
+        },
+
+        onError: (errors) => {
+            console.log('ADD SITE ERROR:', errors);
         },
     });
 };
@@ -724,75 +755,158 @@ watch(
                         v-if="showAddSiteForm"
                         class="mb-4 rounded-lg border p-4"
                     >
-                        <div class="mb-3">
+                        <div class="mb-4">
                             <h3 class="font-medium">Tambah Site</h3>
 
                             <p class="text-sm text-muted-foreground">
-                                Cari site yang akan ditambahkan ke ticket GAMAS.
+                                Tambahkan site baru ke ticket GAMAS.
                             </p>
                         </div>
 
-                        <div class="relative">
+                        <!-- SUMBER SITE -->
+                        <div>
                             <label class="mb-1 block text-sm font-medium">
-                                Site
+                                Sumber Site
                             </label>
 
-                            <input
-                                v-model="siteSearch"
-                                type="text"
-                                placeholder="Cari nama site atau no jaringan..."
+                            <select
+                                v-model="addSiteForm.source"
                                 class="w-full rounded-md border px-3 py-2 text-sm"
-                                @focus="showSiteResults = true"
-                            />
-
-                            <!-- HASIL PENCARIAN -->
-                            <div
-                                v-if="showSiteResults && filteredSites.length"
-                                class="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border bg-background shadow-lg"
                             >
-                                <button
-                                    v-for="site in filteredSites"
-                                    :key="site.id"
-                                    type="button"
-                                    class="block w-full border-b px-3 py-3 text-left hover:bg-muted"
-                                    @click="selectSite(site)"
-                                >
-                                    <div class="text-sm font-medium">
-                                        {{ site.nama_site || '-' }}
-                                    </div>
+                                <option value="online_billing">
+                                    Sudah ada di Online Billing
+                                </option>
 
-                                    <div class="text-xs text-muted-foreground">
-                                        No Jaringan:
-                                        {{ site.no_jaringan || '-' }}
-                                    </div>
-                                </button>
-                            </div>
-
-                            <!-- TIDAK ADA HASIL -->
-                            <div
-                                v-if="
-                                    showSiteResults &&
-                                    siteSearch &&
-                                    filteredSites.length === 0
-                                "
-                                class="absolute z-50 mt-1 w-full rounded-md border bg-background p-3 text-sm text-muted-foreground shadow-lg"
-                            >
-                                Site tidak ditemukan.
-                            </div>
+                                <option value="manual">
+                                    Belum ada di Online Billing
+                                </option>
+                            </select>
                         </div>
 
-                        <!-- SITE YANG DIPILIH -->
+                        <!-- =================================================
+         SITE DARI ONLINE BILLING
+    ================================================== -->
+
                         <div
-                            v-if="addSiteForm.online_billing_id"
-                            class="mt-3 rounded-md bg-muted/40 p-3"
+                            v-if="addSiteForm.source === 'online_billing'"
+                            class="mt-4"
                         >
-                            <div class="text-sm font-medium">Site dipilih</div>
+                            <label class="mb-1 block text-sm font-medium">
+                                Cari Site
+                            </label>
 
-                            <div class="mt-1 text-sm">
-                                {{ siteSearch }}
+                            <div class="relative">
+                                <input
+                                    v-model="siteSearch"
+                                    type="text"
+                                    placeholder="Cari nama site atau no jaringan..."
+                                    class="w-full rounded-md border px-3 py-2 text-sm"
+                                    @focus="showSiteResults = true"
+                                />
+
+                                <!-- HASIL PENCARIAN -->
+                                <div
+                                    v-if="
+                                        showSiteResults && filteredSites.length
+                                    "
+                                    class="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border bg-background shadow-lg"
+                                >
+                                    <button
+                                        v-for="site in filteredSites"
+                                        :key="site.id"
+                                        type="button"
+                                        class="block w-full border-b px-3 py-3 text-left hover:bg-muted"
+                                        @click="selectSite(site)"
+                                    >
+                                        <div class="text-sm font-medium">
+                                            {{ site.nama_site || '-' }}
+                                        </div>
+
+                                        <div
+                                            class="text-xs text-muted-foreground"
+                                        >
+                                            No Jaringan:
+                                            {{ site.no_jaringan || '-' }}
+                                        </div>
+                                    </button>
+                                </div>
+
+                                <!-- TIDAK ADA HASIL -->
+                                <div
+                                    v-if="
+                                        showSiteResults &&
+                                        siteSearch &&
+                                        filteredSites.length === 0
+                                    "
+                                    class="absolute z-50 mt-1 w-full rounded-md border bg-background p-3 text-sm text-muted-foreground shadow-lg"
+                                >
+                                    Site tidak ditemukan.
+                                </div>
+                            </div>
+
+                            <!-- SITE TERPILIH -->
+                            <div
+                                v-if="addSiteForm.online_billing_id"
+                                class="mt-3 rounded-md bg-muted/40 p-3"
+                            >
+                                <div class="text-sm font-medium">
+                                    Site dipilih
+                                </div>
+
+                                <div class="mt-1 text-sm">
+                                    {{ siteSearch }}
+                                </div>
                             </div>
                         </div>
 
+                        <!-- =================================================
+         SITE MANUAL
+    ================================================== -->
+
+                        <div
+                            v-if="addSiteForm.source === 'manual'"
+                            class="mt-4 space-y-4"
+                        >
+                            <div>
+                                <label class="mb-1 block text-sm font-medium">
+                                    Nama Site
+                                </label>
+
+                                <input
+                                    v-model="addSiteForm.site_name"
+                                    type="text"
+                                    placeholder="Masukkan nama site"
+                                    class="w-full rounded-md border px-3 py-2 text-sm"
+                                />
+                            </div>
+
+                            <div>
+                                <label class="mb-1 block text-sm font-medium">
+                                    No Jaringan
+                                </label>
+
+                                <input
+                                    v-model="addSiteForm.no_jaringan"
+                                    type="text"
+                                    placeholder="Masukkan no jaringan jika sudah ada"
+                                    class="w-full rounded-md border px-3 py-2 text-sm"
+                                />
+                            </div>
+                            <div class="mt-4">
+                                <label class="mb-1 block text-sm font-medium">
+                                    Dilaporkan melalui
+                                </label>
+
+                                <input
+                                    v-model="addSiteForm.reported_via"
+                                    type="text"
+                                    placeholder="Contoh: WhatsApp, Telepon, Email"
+                                    class="w-full rounded-md border px-3 py-2 text-sm"
+                                />
+                            </div>
+                        </div>
+
+                        <!-- BUTTON -->
                         <div class="mt-4 flex gap-2">
                             <button
                                 type="button"
@@ -806,8 +920,11 @@ watch(
                                 type="button"
                                 class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50"
                                 :disabled="
-                                    !addSiteForm.online_billing_id ||
-                                    addSiteForm.processing
+                                    addSiteForm.processing ||
+                                    (addSiteForm.source === 'online_billing' &&
+                                        !addSiteForm.online_billing_id) ||
+                                    (addSiteForm.source === 'manual' &&
+                                        !addSiteForm.site_name)
                                 "
                                 @click="submitAddSite"
                             >

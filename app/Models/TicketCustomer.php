@@ -13,6 +13,8 @@ class TicketCustomer extends Model
 
     protected $fillable = [
         'ticket_id',
+        'pelanggan_id',
+
         'online_billing_id',
         'customer_name',
         'site_name',
@@ -40,5 +42,9 @@ class TicketCustomer extends Model
             OnlineBilling::class,
             'online_billing_id'
         );
+    }
+    public function pelanggan(): BelongsTo
+    {
+        return $this->belongsTo(Pelanggan::class, 'pelanggan_id');
     }
 }

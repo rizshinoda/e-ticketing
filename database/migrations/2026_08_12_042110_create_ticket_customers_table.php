@@ -12,26 +12,37 @@ return new class extends Migration
             $table->id();
 
             /*
-             * Ticket induk.
-             */
+ * Ticket induk.
+ */
             $table->foreignId('ticket_id')
                 ->constrained('tickets')
                 ->cascadeOnDelete();
 
             /*
-             * Referensi site/layanan pada Online Billing.
-             *
-             * Nullable jika site belum tersedia
-             * di Online Billing.
-             */
+ * Customer utama ticket.
+ *
+ * Digunakan untuk memastikan seluruh site
+ * dalam ticket GAMAS berasal dari customer yang sama.
+ */
+            $table->foreignId('pelanggan_id')
+                ->nullable()
+                ->constrained('pelanggans')
+                ->nullOnDelete();
+
+            /*
+ * Referensi site/layanan pada Online Billing.
+ *
+ * Nullable jika site belum tersedia
+ * di Online Billing.
+ */
             $table->foreignId('online_billing_id')
                 ->nullable()
                 ->constrained('online_billings')
                 ->nullOnDelete();
 
             /*
-             * Snapshot data ketika ticket dibuat.
-             */
+ * Snapshot data ketika ticket dibuat.
+ */
             $table->string('customer_name')->nullable();
 
             $table->string('site_name')->nullable();
@@ -39,14 +50,14 @@ return new class extends Migration
             $table->string('no_jaringan')->nullable();
 
             /*
-             * Media/tempat customer melaporkan gangguan.
-             *
-             * Contoh:
-             * WAG CSD/NSD.LA-PC24Telin
-             * WFG LA Sulampua
-             * Email
-             * WA Personal
-             */
+ * Media/tempat customer melaporkan gangguan.
+ *
+ * Contoh:
+ * WAG CSD/NSD.LA-PC24Telin
+ * WFG LA Sulampua
+ * Email
+ * WA Personal
+ */
             $table->string('reported_via')->nullable();
 
             $table->timestamps();
@@ -55,6 +66,8 @@ return new class extends Migration
                 'ticket_id',
                 'online_billing_id',
             ]);
+
+            $table->index('pelanggan_id');
         });
     }
 

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\OnlineBilling;
+use App\Models\Pelanggan;
 use App\Models\Rfo;
 use App\Models\Ticket;
 use App\Models\TicketCategory;
@@ -87,7 +88,12 @@ class TicketController extends Controller
             ]);
 
         $search = trim($request->input('search', ''));
-
+        $pelanggans = Pelanggan::query()
+            ->orderBy('nama_pelanggan')
+            ->get([
+                'id',
+                'nama_pelanggan',
+            ]);
         $onlineBillings = collect();
 
         if ($search !== '') {
@@ -134,7 +140,7 @@ class TicketController extends Controller
 
         return Inertia::render('Tickets/Create', [
             'categories' => $categories,
-
+            'pelanggans' => $pelanggans,
             'onlineBillings' => $onlineBillings
                 ->map(function ($billing) {
                     return [
@@ -169,13 +175,51 @@ class TicketController extends Controller
      */
     public function store(Request $request)
     {
+        /*
+    |--------------------------------------------------------------------------
+    | VALIDASI
+    |--------------------------------------------------------------------------
+    */
+
         $validated = $request->validate([
+
+            /*
+        |--------------------------------------------------------------------------
+        | TICKET TYPE
+        |--------------------------------------------------------------------------
+        */
+
             'ticket_type' => [
                 'required',
                 'in:individual,gamas',
             ],
 
+            /*
+        |--------------------------------------------------------------------------
+        | SUMBER CUSTOMER
+        |--------------------------------------------------------------------------
+        |
+        | online_billing = customer/site sudah ada di Online Billing.
+        | manual          = customer/site belum masuk Online Billing.
+        |
+        */
+
+            'customer_source' => [
+                'required',
+                'in:online_billing,manual',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | ONLINE BILLING
+        |--------------------------------------------------------------------------
+        |
+        | Hanya digunakan jika customer_source = online_billing.
+        |
+        */
+
             'online_billing_ids' => [
+                'exclude_unless:customer_source,online_billing',
                 'required',
                 'array',
                 'min:1',
@@ -187,6 +231,77 @@ class TicketController extends Controller
                 'distinct',
                 'exists:online_billings,id',
             ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | CUSTOMER MANUAL
+        |--------------------------------------------------------------------------
+        |
+        | Customer dipilih dari Master Pelanggan.
+        |
+        */
+
+            'pelanggan_id' => [
+                'required_if:customer_source,manual',
+                'nullable',
+                'integer',
+                'exists:pelanggans,id',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | CUSTOMER NAME
+        |--------------------------------------------------------------------------
+        |
+        | Tidak lagi menjadi sumber utama customer.
+        | Nama customer akan diambil dari Master Pelanggan
+        | berdasarkan pelanggan_id.
+        |
+        */
+
+            'customer_name' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | MANUAL SITES
+        |--------------------------------------------------------------------------
+        |
+        | Individual:
+        |   1 site.
+        |
+        | GAMAS:
+        |   dapat memiliki banyak site.
+        |
+        */
+
+            'manual_sites' => [
+                'exclude_unless:customer_source,manual',
+                'required',
+                'array',
+                'min:1',
+            ],
+
+            'manual_sites.*.site_name' => [
+                'required',
+                'string',
+                'max:255',
+            ],
+
+            'manual_sites.*.no_jaringan' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | INCIDENT
+        |--------------------------------------------------------------------------
+        */
 
             'kendala_id' => [
                 'required',
@@ -208,6 +323,7 @@ class TicketController extends Controller
                 'required',
                 'date',
             ],
+
             'report_type' => [
                 'required',
                 'in:current,historical',
@@ -225,6 +341,7 @@ class TicketController extends Controller
                 'date',
                 'after:incident_reported_at',
             ],
+
             'description' => [
                 'required',
                 'string',
@@ -233,45 +350,93 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | Ambil Online Billing
+    | VALIDASI JUMLAH SITE MANUAL UNTUK INDIVIDUAL
     |--------------------------------------------------------------------------
-    */
-
-        $onlineBillings = OnlineBilling::query()
-            ->with('pelanggan')
-            ->where('status', 'active')
-            ->whereIn(
-                'id',
-                $validated['online_billing_ids']
-            )
-            ->get();
-
-        /*
-    |--------------------------------------------------------------------------
-    | Pastikan semua Online Billing valid dan aktif
-    |--------------------------------------------------------------------------
+    |
+    | Individual hanya boleh mempunyai 1 site.
+    |
     */
 
         if (
-            $onlineBillings->count() !==
-            count($validated['online_billing_ids'])
+            $validated['customer_source'] === 'manual' &&
+            $validated['ticket_type'] === 'individual' &&
+            count($validated['manual_sites']) !== 1
         ) {
             return back()
                 ->withErrors([
-                    'online_billing_ids' =>
-                    'Salah satu Online Billing tidak ditemukan atau sudah tidak aktif.',
+                    'manual_sites' =>
+                    'Ticket individual hanya dapat memiliki satu site.',
                 ])
                 ->withInput();
         }
 
         /*
     |--------------------------------------------------------------------------
-    | Individual hanya boleh 1 site
+    | AMBIL CUSTOMER DARI MASTER PELANGGAN
+    |--------------------------------------------------------------------------
+    |
+    | Hanya dilakukan jika customer_source = manual.
+    |
+    */
+
+        $pelanggan = null;
+
+        if ($validated['customer_source'] === 'manual') {
+            $pelanggan = Pelanggan::findOrFail(
+                $validated['pelanggan_id']
+            );
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | AMBIL ONLINE BILLING
+    |--------------------------------------------------------------------------
+    |
+    | Hanya dijalankan jika customer berasal dari Online Billing.
+    |
+    */
+
+        $onlineBillings = collect();
+
+        if ($validated['customer_source'] === 'online_billing') {
+
+            $onlineBillings = OnlineBilling::query()
+                ->with('pelanggan')
+                ->where('status', 'active')
+                ->whereIn(
+                    'id',
+                    $validated['online_billing_ids']
+                )
+                ->get();
+
+            /*
+        |--------------------------------------------------------------------------
+        | Pastikan semua Online Billing valid dan aktif
+        |--------------------------------------------------------------------------
+        */
+
+            if (
+                $onlineBillings->count() !==
+                count($validated['online_billing_ids'])
+            ) {
+                return back()
+                    ->withErrors([
+                        'online_billing_ids' =>
+                        'Salah satu Online Billing tidak ditemukan atau sudah tidak aktif.',
+                    ])
+                    ->withInput();
+            }
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | INDIVIDUAL HANYA BOLEH 1 SITE
     |--------------------------------------------------------------------------
     */
 
         if (
             $validated['ticket_type'] === 'individual' &&
+            $validated['customer_source'] === 'online_billing' &&
             $onlineBillings->count() !== 1
         ) {
             return back()
@@ -284,13 +449,50 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | Buat Ticket
+    | GAMAS + ONLINE BILLING
+    |--------------------------------------------------------------------------
+    |
+    | Satu GAMAS hanya boleh mempunyai satu customer,
+    | tetapi dapat mempunyai banyak site.
+    |
+    */
+
+        if (
+            $validated['ticket_type'] === 'gamas' &&
+            $validated['customer_source'] === 'online_billing'
+        ) {
+
+            $customerIds = $onlineBillings
+                ->pluck('pelanggan_id')
+                ->filter()
+                ->unique();
+
+            /*
+        |--------------------------------------------------------------------------
+        | Semua site GAMAS harus berasal dari customer yang sama
+        |--------------------------------------------------------------------------
+        */
+
+            if ($customerIds->count() !== 1) {
+                return back()
+                    ->withErrors([
+                        'online_billing_ids' =>
+                        'Ticket GAMAS hanya dapat memiliki site dari customer yang sama.',
+                    ])
+                    ->withInput();
+            }
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | BUAT TICKET
     |--------------------------------------------------------------------------
     */
 
         $ticket = DB::transaction(function () use (
             $validated,
-            $onlineBillings
+            $onlineBillings,
+            $pelanggan
         ) {
 
             /*
@@ -308,54 +510,157 @@ class TicketController extends Controller
         */
 
             $ticket = Ticket::create([
-                'ticket_number' => $ticketNumber,
-                'ticket_type' => $validated['ticket_type'],
-                'description' => $validated['description'],
-                'priority' => $validated['priority'],
-                'status' => 'open',
-                'created_by' => Auth::id(),
-                'reported_at' => $validated['reported_at'],
+                'ticket_number' =>
+                $ticketNumber,
+
+                'ticket_type' =>
+                $validated['ticket_type'],
+
+                'description' =>
+                $validated['description'],
+
+                'priority' =>
+                $validated['priority'],
+
+                'status' =>
+                'open',
+
+                'created_by' =>
+                Auth::id(),
+
+                'reported_at' =>
+                $validated['reported_at'],
             ]);
+
             /*
-|--------------------------------------------------------------------------
-| 2. CREATE CUSTOMER / SITE
-|--------------------------------------------------------------------------
-*/
+        |--------------------------------------------------------------------------
+        | 2. CREATE CUSTOMER / SITE
+        |--------------------------------------------------------------------------
+        */
 
-            foreach ($onlineBillings as $onlineBilling) {
+            if ($validated['customer_source'] === 'online_billing') {
 
-                $ticket->customers()->create([
-                    'online_billing_id' => $onlineBilling->id,
+                /*
+            |--------------------------------------------------------------------------
+            | CUSTOMER DARI ONLINE BILLING
+            |--------------------------------------------------------------------------
+            */
 
-                    'customer_name' =>
-                    $onlineBilling->pelanggan?->nama_pelanggan,
+                foreach ($onlineBillings as $onlineBilling) {
 
-                    'site_name' =>
-                    $onlineBilling->nama_site,
+                    $ticket->customers()->create([
+                        /*
+                     * Customer ID dari Online Billing.
+                     */
+                        'pelanggan_id' =>
+                        $onlineBilling->pelanggan_id,
 
-                    'no_jaringan' =>
-                    $onlineBilling->no_jaringan,
+                        /*
+                     * Referensi Online Billing.
+                     */
+                        'online_billing_id' =>
+                        $onlineBilling->id,
 
-                    'reported_via' =>
-                    $validated['reported_via'] ?? null,
-                ]);
+                        /*
+                     * Snapshot nama customer.
+                     */
+                        'customer_name' =>
+                        $onlineBilling->pelanggan?->nama_pelanggan,
+
+                        /*
+                     * Snapshot site.
+                     */
+                        'site_name' =>
+                        $onlineBilling->nama_site,
+
+                        /*
+                     * Snapshot no jaringan.
+                     */
+                        'no_jaringan' =>
+                        $onlineBilling->no_jaringan,
+
+                        /*
+                     * Media/tempat customer melaporkan.
+                     */
+                        'reported_via' =>
+                        $validated['reported_via'] ?? null,
+                    ]);
+                }
+            } else {
+
+                /*
+            |--------------------------------------------------------------------------
+            | CUSTOMER MANUAL
+            |--------------------------------------------------------------------------
+            |
+            | Customer berasal dari Master Pelanggan.
+            |
+            */
+
+                foreach ($validated['manual_sites'] as $site) {
+
+                    $ticket->customers()->create([
+
+                        /*
+                     * ID customer sebenarnya.
+                     */
+                        'pelanggan_id' =>
+                        $pelanggan->id,
+
+                        /*
+                     * Belum ada Online Billing.
+                     */
+                        'online_billing_id' =>
+                        null,
+
+                        /*
+                     * Snapshot nama customer.
+                     */
+                        'customer_name' =>
+                        $pelanggan->nama_pelanggan,
+
+                        /*
+                     * Nama site manual.
+                     */
+                        'site_name' =>
+                        $site['site_name'],
+
+                        /*
+                     * No jaringan manual.
+                     */
+                        'no_jaringan' =>
+                        $site['no_jaringan'] ?? null,
+
+                        /*
+                     * Media/tempat customer melaporkan.
+                     */
+                        'reported_via' =>
+                        $validated['reported_via'] ?? null,
+                    ]);
+                }
             }
 
             /*
-|--------------------------------------------------------------------------
-| 3. CREATE INCIDENT PERTAMA
-|--------------------------------------------------------------------------
-*/
+        |--------------------------------------------------------------------------
+        | 3. CREATE INCIDENT PERTAMA
+        |--------------------------------------------------------------------------
+        */
 
             $ticket->incidents()->create([
-                'incident_number' => 1,
-                'kendala_id' => $validated['kendala_id'],
 
-                'reported_at' => $validated['report_type'] === 'historical'
+                'incident_number' =>
+                1,
+
+                'kendala_id' =>
+                $validated['kendala_id'],
+
+                'reported_at' =>
+                $validated['report_type'] === 'historical'
                     ? $validated['incident_reported_at']
                     : $validated['reported_at'],
 
-                'resolved_at' => $validated['report_type'] === 'historical'
+                'resolved_at' =>
+                $validated['report_type'] === 'historical'
                     ? $validated['incident_resolved_at']
                     : null,
             ]);
@@ -367,14 +672,17 @@ class TicketController extends Controller
         */
 
             $ticket->updates()->create([
-                'user_id' => Auth::id(),
 
-                'message' => 'Ticket dibuat.',
+                'user_id' =>
+                Auth::id(),
+
+                'message' =>
+                'Ticket dibuat.',
             ]);
 
             /*
         |--------------------------------------------------------------------------
-        | Return ticket dari transaction
+        | RETURN TICKET
         |--------------------------------------------------------------------------
         */
 
@@ -383,7 +691,7 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | Redirect ke detail ticket
+    | REDIRECT KE DETAIL TICKET
     |--------------------------------------------------------------------------
     */
 
@@ -401,17 +709,39 @@ class TicketController extends Controller
      */
     public function show(Ticket $ticket): Response
     {
+        /*
+    |--------------------------------------------------------------------------
+    | LOAD DATA TICKET
+    |--------------------------------------------------------------------------
+    */
+
         $ticket->load([
             'creator',
             'resolver',
             'closer',
+
+            /*
+         * Customer/site ticket.
+         *
+         * onlineBilling tetap di-load karena
+         * Show.vue masih membutuhkan data Online Billing
+         * jika site berasal dari Online Billing.
+         */
+            'customers.pelanggan',
             'customers.onlineBilling',
+
             'incidents.category',
             'stopClocks',
             'rfos.creator',
             'updates.user',
             'updates.attachments',
         ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | KATEGORI KENDALA
+    |--------------------------------------------------------------------------
+    */
 
         $categories = TicketCategory::query()
             ->orderBy('name')
@@ -423,7 +753,7 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | Site yang tersedia untuk GAMAS
+    | SITE YANG TERSEDIA UNTUK GAMAS
     |--------------------------------------------------------------------------
     */
 
@@ -431,18 +761,44 @@ class TicketController extends Controller
 
         if ($ticket->ticket_type === 'gamas') {
 
-            // Ambil pelanggan dari site pertama GAMAS
+            /*
+        |--------------------------------------------------------------------------
+        | AMBIL CUSTOMER UTAMA GAMAS
+        |--------------------------------------------------------------------------
+        |
+        | Sekarang pelanggan_id berada langsung di
+        | ticket_customers.
+        |
+        | Jadi tidak peduli site pertama:
+        |
+        | - Manual
+        | - Online Billing
+        |
+        | customer tetap dapat ditemukan.
+        |
+        */
+
             $firstCustomer = $ticket->customers->first();
 
-            if ($firstCustomer?->onlineBilling?->pelanggan_id) {
+            $pelangganId = $firstCustomer?->pelanggan_id;
 
-                $pelangganId =
-                    $firstCustomer->onlineBilling->pelanggan_id;
+            /*
+        |--------------------------------------------------------------------------
+        | CUSTOMER HARUS DITEMUKAN
+        |--------------------------------------------------------------------------
+        */
+
+            if ($pelangganId) {
 
                 /*
-             * Ambil semua Online Billing aktif
-             * milik pelanggan tersebut.
-             */
+            |--------------------------------------------------------------------------
+            | AMBIL SEMUA ONLINE BILLING AKTIF
+            |--------------------------------------------------------------------------
+            |
+            | Hanya site milik customer GAMAS yang ditampilkan.
+            |
+            */
+
                 $availableSites = OnlineBilling::query()
                     ->with('pelanggan')
                     ->where('status', 'active')
@@ -456,20 +812,36 @@ class TicketController extends Controller
                     ]);
 
                 /*
-             * Jangan tampilkan site yang sudah
-             * ada di ticket GAMAS.
-             */
-                $existingOnlineBillingIds =
-                    $ticket->customers
+            |--------------------------------------------------------------------------
+            | AMBIL SITE ONLINE BILLING YANG SUDAH ADA
+            |--------------------------------------------------------------------------
+            */
+
+                $existingOnlineBillingIds = $ticket->customers
                     ->pluck('online_billing_id')
                     ->filter()
                     ->values();
 
+                /*
+            |--------------------------------------------------------------------------
+            | HANYA TAMPILKAN SITE YANG BELUM ADA
+            |--------------------------------------------------------------------------
+            */
+
                 $availableSites = $availableSites
-                    ->whereNotIn('id', $existingOnlineBillingIds)
+                    ->whereNotIn(
+                        'id',
+                        $existingOnlineBillingIds
+                    )
                     ->values();
             }
         }
+
+        /*
+    |--------------------------------------------------------------------------
+    | RETURN KE INERTIA
+    |--------------------------------------------------------------------------
+    */
 
         return Inertia::render('Tickets/Show', [
             'ticket' => $ticket,
@@ -1223,78 +1595,338 @@ class TicketController extends Controller
     }
     public function addSite(Request $request, Ticket $ticket)
     {
+        /*
+    |--------------------------------------------------------------------------
+    | VALIDASI
+    |--------------------------------------------------------------------------
+    */
+
         $validated = $request->validate([
-            'online_billing_id' => [
+            'source' => [
                 'required',
+                'in:online_billing,manual',
+            ],
+
+            'online_billing_id' => [
+                'nullable',
                 'integer',
                 'exists:online_billings,id',
             ],
+
+            'site_name' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'no_jaringan' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'reported_via' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
         ]);
 
-        // Pastikan ticket adalah GAMAS
+        /*
+    |--------------------------------------------------------------------------
+    | PASTIKAN TICKET GAMAS
+    |--------------------------------------------------------------------------
+    */
+
         if ($ticket->ticket_type !== 'gamas') {
             return back()->withErrors([
-                'online_billing_id' =>
+                'site' =>
                 'Site hanya dapat ditambahkan ke ticket GAMAS.',
             ]);
         }
 
-        // Ambil site yang dipilih
-        $onlineBilling = OnlineBilling::query()
-            ->with('pelanggan')
-            ->where('status', 'active')
-            ->findOrFail($validated['online_billing_id']);
+        /*
+    |--------------------------------------------------------------------------
+    | AMBIL CUSTOMER UTAMA GAMAS
+    |--------------------------------------------------------------------------
+    |
+    | Sekarang customer utama ditentukan berdasarkan pelanggan_id,
+    | bukan berdasarkan online_billing_id.
+    |
+    */
 
-        // Ambil customer dari site pertama yang sudah ada
         $existingCustomer = $ticket->customers()
-            ->with('onlineBilling')
             ->first();
 
-        if (!$existingCustomer?->onlineBilling) {
+        if (!$existingCustomer) {
             return back()->withErrors([
-                'online_billing_id' =>
+                'site' =>
                 'Customer utama ticket GAMAS tidak ditemukan.',
             ]);
         }
 
-        // Pastikan site berasal dari customer yang sama
-        if (
-            $onlineBilling->pelanggan_id !==
-            $existingCustomer->onlineBilling->pelanggan_id
-        ) {
+        /*
+    |--------------------------------------------------------------------------
+    | PASTIKAN GAMAS MEMILIKI PELANGGAN_ID
+    |--------------------------------------------------------------------------
+    */
+
+        if (!$existingCustomer->pelanggan_id) {
             return back()->withErrors([
-                'online_billing_id' =>
-                'Site harus berasal dari customer yang sama dengan ticket GAMAS.',
+                'site' =>
+                'Customer ticket GAMAS belum memiliki identitas pelanggan.',
             ]);
         }
 
-        // Pastikan site belum ada di ticket
-        $alreadyExists = $ticket->customers()
-            ->where('online_billing_id', $onlineBilling->id)
-            ->exists();
+        /*
+    |--------------------------------------------------------------------------
+    | SITE DARI ONLINE BILLING
+    |--------------------------------------------------------------------------
+    */
 
-        if ($alreadyExists) {
-            return back()->withErrors([
+        if ($validated['source'] === 'online_billing') {
+
+            /*
+        |--------------------------------------------------------------------------
+        | Online Billing ID wajib
+        |--------------------------------------------------------------------------
+        */
+
+            if (!$validated['online_billing_id']) {
+                return back()->withErrors([
+                    'online_billing_id' =>
+                    'Silakan pilih site dari Online Billing.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | AMBIL ONLINE BILLING
+        |--------------------------------------------------------------------------
+        */
+
+            $onlineBilling = OnlineBilling::query()
+                ->with('pelanggan')
+                ->where('status', 'active')
+                ->find($validated['online_billing_id']);
+
+            if (!$onlineBilling) {
+                return back()->withErrors([
+                    'online_billing_id' =>
+                    'Online Billing tidak ditemukan atau sudah tidak aktif.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | PASTIKAN CUSTOMER SAMA
+        |--------------------------------------------------------------------------
+        |
+        | Customer ticket:
+        |   $existingCustomer->pelanggan_id
+        |
+        | Customer site Online Billing:
+        |   $onlineBilling->pelanggan_id
+        |
+        | Keduanya harus sama.
+        |
+        */
+
+            if (
+                $onlineBilling->pelanggan_id !==
+                $existingCustomer->pelanggan_id
+            ) {
+                return back()->withErrors([
+                    'online_billing_id' =>
+                    'Site harus berasal dari customer yang sama dengan ticket GAMAS.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | PASTIKAN SITE BELUM ADA DI TICKET
+        |--------------------------------------------------------------------------
+        */
+
+            $alreadyExists = $ticket->customers()
+                ->where(
+                    'online_billing_id',
+                    $onlineBilling->id
+                )
+                ->exists();
+
+            if ($alreadyExists) {
+                return back()->withErrors([
+                    'online_billing_id' =>
+                    'Site tersebut sudah ada di ticket.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | SIMPAN SITE ONLINE BILLING
+        |--------------------------------------------------------------------------
+        */
+
+            $ticket->customers()->create([
+                /*
+             * Identitas customer.
+             */
+                'pelanggan_id' =>
+                $onlineBilling->pelanggan_id,
+
+                /*
+             * Referensi Online Billing.
+             */
                 'online_billing_id' =>
-                'Site tersebut sudah ada di ticket.',
+                $onlineBilling->id,
+
+                /*
+             * Snapshot nama customer.
+             */
+                'customer_name' =>
+                $onlineBilling->pelanggan?->nama_pelanggan,
+
+                /*
+             * Snapshot nama site.
+             */
+                'site_name' =>
+                $onlineBilling->nama_site,
+
+                /*
+             * Snapshot nomor jaringan.
+             */
+                'no_jaringan' =>
+                $onlineBilling->no_jaringan,
+
+                /*
+             * Media/tempat customer melaporkan.
+             */
+                'reported_via' =>
+                $validated['reported_via'] ?? null,
+            ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | HISTORY
+        |--------------------------------------------------------------------------
+        */
+
+            $ticket->updates()->create([
+                'user_id' =>
+                Auth::id(),
+
+                'message' =>
+                'Site dari Online Billing ditambahkan: ' .
+                    ($onlineBilling->nama_site ?? '-'),
             ]);
         }
 
-        $ticket->customers()->create([
-            'online_billing_id' => $onlineBilling->id,
-            'customer_name' => $onlineBilling->pelanggan?->nama_pelanggan,
-            'site_name' => $onlineBilling->nama_site,
-            'no_jaringan' => $onlineBilling->no_jaringan,
-            'reported_via' => null,
-        ]);
+        /*
+    |--------------------------------------------------------------------------
+    | SITE MANUAL
+    |--------------------------------------------------------------------------
+    */ else {
 
-        // Catat ke Activity
-        $ticket->updates()->create([
-            'user_id' => Auth::id(),
-            'message' =>
-            'Site ditambahkan ke ticket: ' .
-                ($onlineBilling->nama_site ?? '-'),
-        ]);
+            /*
+        |--------------------------------------------------------------------------
+        | NAMA SITE WAJIB
+        |--------------------------------------------------------------------------
+        */
+
+            if (empty($validated['site_name'])) {
+                return back()->withErrors([
+                    'site_name' =>
+                    'Nama site wajib diisi.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | PASTIKAN SITE MANUAL BELUM ADA
+        |--------------------------------------------------------------------------
+        */
+
+            $alreadyExists = $ticket->customers()
+                ->whereNull('online_billing_id')
+                ->where(
+                    'site_name',
+                    $validated['site_name']
+                )
+                ->exists();
+
+            if ($alreadyExists) {
+                return back()->withErrors([
+                    'site_name' =>
+                    'Site tersebut sudah ada di ticket.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | SIMPAN SITE MANUAL
+        |--------------------------------------------------------------------------
+        */
+
+            $ticket->customers()->create([
+                /*
+             * Gunakan customer utama GAMAS.
+             */
+                'pelanggan_id' =>
+                $existingCustomer->pelanggan_id,
+
+                /*
+             * Belum ada di Online Billing.
+             */
+                'online_billing_id' =>
+                null,
+
+                /*
+             * Snapshot nama customer.
+             */
+                'customer_name' =>
+                $existingCustomer->customer_name,
+
+                /*
+             * Nama site manual.
+             */
+                'site_name' =>
+                $validated['site_name'],
+
+                /*
+             * Nomor jaringan jika ada.
+             */
+                'no_jaringan' =>
+                $validated['no_jaringan'] ?? null,
+
+                /*
+             * Media/tempat customer melaporkan.
+             */
+                'reported_via' =>
+                $validated['reported_via'] ?? null,
+            ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | HISTORY
+        |--------------------------------------------------------------------------
+        */
+
+            $ticket->updates()->create([
+                'user_id' =>
+                Auth::id(),
+
+                'message' =>
+                'Site manual ditambahkan: ' .
+                    $validated['site_name'],
+            ]);
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | RESPONSE
+    |--------------------------------------------------------------------------
+    */
 
         return back()->with(
             'success',

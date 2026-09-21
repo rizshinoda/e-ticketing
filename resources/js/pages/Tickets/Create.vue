@@ -16,13 +16,17 @@ interface OnlineBilling {
     layanan: string | null;
     bandwidth: string | null;
 }
-
+interface Pelanggan {
+    id: number;
+    nama_pelanggan: string;
+}
 interface Filters {
     search: string;
 }
 
 const props = defineProps<{
     categories: Category[];
+    pelanggans: Pelanggan[];
     onlineBillings: OnlineBilling[];
     filters: Filters;
 }>();
@@ -52,11 +56,19 @@ const selectedBillings = ref<OnlineBilling[]>([]);
 | Form
 |--------------------------------------------------------------------------
 */
-
 const form = useForm({
     ticket_type: 'individual',
 
+    customer_source: 'online_billing',
+
     online_billing_ids: [] as number[],
+
+    customer_name: '',
+    pelanggan_id: null as number | null,
+    manual_sites: [] as {
+        site_name: string;
+        no_jaringan: string;
+    }[],
 
     kendala_id: null as number | null,
 
@@ -64,8 +76,6 @@ const form = useForm({
 
     priority: 'medium',
 
-    // current = gangguan yang sedang terjadi
-    // historical = gangguan yang sudah terjadi sebelumnya
     report_type: 'current',
 
     reported_at: new Date()
@@ -75,7 +85,6 @@ const form = useForm({
         .replace(' ', 'T')
         .slice(0, 16),
 
-    // Waktu kejadian incident
     incident_reported_at: new Date()
         .toLocaleString('sv-SE', {
             timeZone: 'Asia/Jakarta',
@@ -87,6 +96,28 @@ const form = useForm({
 
     description: '',
 });
+const manualSites = ref([
+    {
+        site_name: '',
+        no_jaringan: '',
+    },
+]);
+
+const addManualSite = () => {
+    manualSites.value.push({
+        site_name: '',
+        no_jaringan: '',
+    });
+};
+
+const removeManualSite = (index: number) => {
+    if (manualSites.value.length === 1) {
+        return;
+    }
+
+    manualSites.value.splice(index, 1);
+};
+
 const incidentReportedAt = ref(
     new Date()
         .toLocaleString('sv-SE', {
@@ -265,10 +296,13 @@ watch(
 */
 
 const submit = () => {
+    form.manual_sites = manualSites.value;
+
     form.post('/tickets', {
         onError: (errors) => {
             console.log('ERROR:', errors);
         },
+
         onSuccess: () => {
             console.log('SUCCESS');
         },
@@ -362,11 +396,143 @@ const submit = () => {
                     />
                 </div>
             </div>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium">
+                    Sumber Customer / Site
+                </label>
+
+                <select
+                    v-model="form.customer_source"
+                    class="w-full rounded-md border px-3 py-2 text-sm"
+                >
+                    <option value="online_billing">
+                        Sudah Aktif / Online Billing
+                    </option>
+
+                    <option value="manual">Belum Aktifasi</option>
+                </select>
+            </div>
+            <div
+                v-if="form.customer_source === 'manual'"
+                class="space-y-4 rounded-md border p-4"
+            >
+                <div class="font-medium">Data Customer / Site</div>
+
+                <!-- CUSTOMER -->
+                <div>
+                    <label class="mb-1 block text-sm font-medium">
+                        Nama Customer
+                    </label>
+
+                    <div v-if="form.customer_source === 'manual'">
+                        <label class="mb-1 block text-sm font-medium">
+                            Customer
+                        </label>
+
+                        <select
+                            v-model="form.pelanggan_id"
+                            class="w-full rounded-md border px-3 py-2 text-sm"
+                        >
+                            <option :value="null">Pilih Customer</option>
+
+                            <option
+                                v-for="pelanggan in props.pelanggans"
+                                :key="pelanggan.id"
+                                :value="pelanggan.id"
+                            >
+                                {{ pelanggan.nama_pelanggan }}
+                            </option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- SITE -->
+                <div>
+                    <div class="mb-2 flex items-center justify-between">
+                        <label class="text-sm font-medium"> Site </label>
+
+                        <button
+                            v-if="form.ticket_type === 'gamas'"
+                            type="button"
+                            class="text-sm text-primary hover:underline"
+                            @click="addManualSite"
+                        >
+                            + Tambah Site
+                        </button>
+                    </div>
+
+                    <div class="space-y-3">
+                        <div
+                            v-for="(site, index) in manualSites"
+                            :key="index"
+                            class="rounded-md border p-3"
+                        >
+                            <div class="mb-2 flex items-center justify-between">
+                                <span class="text-sm font-medium">
+                                    Site {{ index + 1 }}
+                                </span>
+
+                                <button
+                                    v-if="
+                                        form.ticket_type === 'gamas' &&
+                                        manualSites.length > 1
+                                    "
+                                    type="button"
+                                    class="text-xs text-destructive hover:underline"
+                                    @click="removeManualSite(index)"
+                                >
+                                    Hapus
+                                </button>
+                            </div>
+
+                            <div class="space-y-3">
+                                <div>
+                                    <label
+                                        class="mb-1 block text-xs font-medium"
+                                    >
+                                        Nama Site
+                                    </label>
+
+                                    <input
+                                        v-model="site.site_name"
+                                        type="text"
+                                        placeholder="Masukkan nama site"
+                                        class="w-full rounded-md border px-3 py-2 text-sm"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label
+                                        class="mb-1 block text-xs font-medium"
+                                    >
+                                        No Jaringan
+                                    </label>
+
+                                    <input
+                                        v-model="site.no_jaringan"
+                                        type="text"
+                                        placeholder="Masukkan no jaringan jika sudah ada"
+                                        class="w-full rounded-md border px-3 py-2 text-sm"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <!-- ======================================
                  SEARCH ONLINE BILLING
             ======================================= -->
 
-            <div class="relative">
+            <!-- ======================================
+     SEARCH ONLINE BILLING
+======================================= -->
+
+            <div
+                v-if="form.customer_source === 'online_billing'"
+                class="relative"
+            >
                 <label class="mb-2 block text-sm font-medium">
                     Customer / Site
                 </label>
@@ -383,7 +549,6 @@ const submit = () => {
                 </p>
 
                 <!-- Loading -->
-
                 <div
                     v-if="searchLoading"
                     class="mt-2 text-sm text-muted-foreground"
@@ -391,10 +556,7 @@ const submit = () => {
                     Mencari...
                 </div>
 
-                <!-- ==================================
-                     SEARCH RESULTS
-                =================================== -->
-
+                <!-- SEARCH RESULTS -->
                 <div
                     v-if="showResults && props.onlineBillings.length"
                     class="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-background shadow-lg"
@@ -418,13 +580,9 @@ const submit = () => {
                         <div class="text-xs text-muted-foreground">
                             No Jaringan:
                             {{ billing.no_jaringan || '-' }}
-
                             ·
-
                             {{ billing.layanan || '-' }}
-
                             ·
-
                             {{ billing.bandwidth || '-' }}
                         </div>
 
@@ -438,7 +596,6 @@ const submit = () => {
                 </div>
 
                 <!-- Tidak ditemukan -->
-
                 <div
                     v-if="
                         showResults &&
@@ -641,7 +798,15 @@ const submit = () => {
                 <button
                     type="submit"
                     class="rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                    :disabled="form.processing || selectedBillings.length === 0"
+                    :disabled="
+                        form.processing ||
+                        (form.customer_source === 'online_billing' &&
+                            selectedBillings.length === 0) ||
+                        (form.customer_source === 'manual' &&
+                            (!form.pelanggan_id ||
+                                manualSites.length === 0 ||
+                                manualSites.some((site) => !site.site_name)))
+                    "
                 >
                     {{ form.processing ? 'Menyimpan...' : 'Buat Ticket' }}
                 </button>
