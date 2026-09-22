@@ -81,6 +81,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 TicketController::class,
                 'addSite',
             ])->name('sites.add');
+            Route::delete('/{ticket}/sites/{ticketCustomerId}', [
+                TicketController::class,
+                'removeSite',
+            ])->name('sites.remove');
         });
     Route::prefix('master')
         ->name('master.')

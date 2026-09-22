@@ -1933,4 +1933,54 @@ class TicketController extends Controller
             'Site berhasil ditambahkan ke ticket.'
         );
     }
+
+    public function removeSite(
+        Request $request,
+        Ticket $ticket,
+        $ticketCustomerId
+    ) {
+        if ($ticket->ticket_type !== 'gamas') {
+            return back()->withErrors([
+                'site' => 'Site hanya dapat dilepas dari ticket GAMAS.',
+            ]);
+        }
+
+        $ticketCustomer = $ticket->customers()
+            ->where('id', $ticketCustomerId)
+            ->first();
+
+        if (!$ticketCustomer) {
+            return back()->withErrors([
+                'site' => 'Site tidak ditemukan di ticket ini.',
+            ]);
+        }
+
+        $siteCount = $ticket->customers()->count();
+
+        if ($siteCount <= 1) {
+            return back()->withErrors([
+                'site' => 'Site terakhir tidak dapat dilepas dari ticket GAMAS.',
+            ]);
+        }
+
+        $siteName = $ticketCustomer->site_name ?? '-';
+
+        DB::transaction(function () use (
+            $ticket,
+            $ticketCustomer,
+            $siteName
+        ) {
+            $ticketCustomer->delete();
+
+            $ticket->updates()->create([
+                'user_id' => Auth::id(),
+                'message' => 'Site dilepas dari ticket: ' . $siteName,
+            ]);
+        });
+
+        return back()->with(
+            'success',
+            'Site berhasil dilepas dari ticket.'
+        );
+    }
 }
