@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Link } from '@inertiajs/vue3';
-
+import { Link, router } from '@inertiajs/vue3';
+import { ref } from 'vue';
 interface Customer {
     id: number;
     customer_name: string | null;
@@ -32,6 +32,8 @@ interface PaginationLink {
 }
 
 interface PaginatedTickets {
+    from: any;
+    to: any;
     data: Ticket[];
     current_page: number;
     last_page: number;
@@ -42,8 +44,46 @@ interface PaginatedTickets {
 
 const props = defineProps<{
     tickets: PaginatedTickets;
+    ticketStats: {
+        total: number;
+        open: number;
+        on_progress: number;
+        resolved: number;
+        closed: number;
+    };
+    filters: {
+        status?: string | null;
+        search?: string | null;
+    };
 }>();
 
+const search = ref(props.filters.search ?? '');
+const filterStatus = (status: string | null) => {
+    router.get(
+        '/tickets',
+        {
+            ...(status ? { status } : {}),
+            ...(search.value ? { search: search.value } : {}),
+        },
+        {
+            preserveState: true,
+            preserveScroll: true,
+        },
+    );
+};
+const doSearch = () => {
+    router.get(
+        '/tickets',
+        {
+            ...(search.value ? { search: search.value } : {}),
+            ...(props.filters.status ? { status: props.filters.status } : {}),
+        },
+        {
+            preserveState: true,
+            preserveScroll: true,
+        },
+    );
+};
 const priorityLabel = (priority: Ticket['priority']) => {
     const labels = {
         low: 'Low',
@@ -144,91 +184,117 @@ const formatDate = (date: string) => {
             </div>
 
             <!-- =====================================================
-                 SUMMARY
-            ====================================================== -->
+     TICKET SUMMARY
+====================================================== -->
 
-            <div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <!-- Total -->
-                <div class="rounded-xl border bg-card p-5 shadow-sm">
-                    <div class="flex items-start justify-between">
+            <div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <!-- TOTAL -->
+                <!-- TOTAL -->
+                <button
+                    type="button"
+                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
+                    :class="{
+                        'ring-2 ring-primary': !props.filters.status,
+                    }"
+                    @click="filterStatus(null)"
+                >
+                    <div class="flex flex-col items-center justify-center">
+                        <p class="text-sm text-muted-foreground">
+                            Total Ticket
+                        </p>
+
+                        <p class="mt-2 text-2xl font-bold">
+                            {{ props.ticketStats.total }}
+                        </p>
+                    </div>
+                </button>
+
+                <!-- OPEN -->
+                <button
+                    type="button"
+                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
+                    :class="{
+                        'ring-2 ring-blue-500': props.filters.status === 'open',
+                    }"
+                    @click="filterStatus('open')"
+                >
+                    <div class="flex flex-col items-center justify-between">
+                        <div>
+                            <p class="text-sm text-muted-foreground">Open</p>
+
+                            <p class="mt-2 text-2xl font-bold">
+                                {{ props.ticketStats.open }}
+                            </p>
+                        </div>
+                    </div>
+                </button>
+
+                <!-- ON PROGRESS -->
+                <button
+                    type="button"
+                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
+                    :class="{
+                        'ring-2 ring-yellow-500':
+                            props.filters.status === 'on_progress',
+                    }"
+                    @click="filterStatus('on_progress')"
+                >
+                    <div class="flex flex-col items-center justify-between">
                         <div>
                             <p class="text-sm text-muted-foreground">
-                                Total Ticket
+                                On Progress
                             </p>
 
                             <p class="mt-2 text-2xl font-bold">
-                                {{ props.tickets.total }}
+                                {{ props.ticketStats.on_progress }}
                             </p>
                         </div>
-
-                        <div
-                            class="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-sm font-semibold"
-                        >
-                            #
-                        </div>
                     </div>
-                </div>
+                </button>
 
-                <!-- Current Page -->
-                <div class="rounded-xl border bg-card p-5 shadow-sm">
-                    <div class="flex items-start justify-between">
+                <!-- RESOLVED -->
+                <button
+                    type="button"
+                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
+                    :class="{
+                        'ring-2 ring-green-500':
+                            props.filters.status === 'resolved',
+                    }"
+                    @click="filterStatus('resolved')"
+                >
+                    <div class="flex flex-col items-center justify-between">
                         <div>
                             <p class="text-sm text-muted-foreground">
-                                Ditampilkan
+                                Resolved
                             </p>
 
                             <p class="mt-2 text-2xl font-bold">
-                                {{ props.tickets.data.length }}
+                                {{ props.ticketStats.resolved }}
                             </p>
                         </div>
-
-                        <div
-                            class="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-sm font-semibold"
-                        >
-                            ↕
-                        </div>
                     </div>
-                </div>
+                </button>
 
-                <!-- Page -->
-                <div class="rounded-xl border bg-card p-5 shadow-sm">
-                    <div class="flex items-start justify-between">
+                <!-- CLOSED -->
+                <button
+                    type="button"
+                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
+                    :class="{
+                        'ring-2 ring-muted-foreground':
+                            props.filters.status === 'closed',
+                    }"
+                    @click="filterStatus('closed')"
+                >
+                    <div class="flex flex-col items-center justify-between">
                         <div>
-                            <p class="text-sm text-muted-foreground">Halaman</p>
+                            <p class="text-sm text-muted-foreground">Closed</p>
 
                             <p class="mt-2 text-2xl font-bold">
-                                {{ props.tickets.current_page }}
+                                {{ props.ticketStats.closed }}
                             </p>
-                        </div>
-
-                        <div
-                            class="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-sm font-semibold"
-                        >
-                            /
                         </div>
                     </div>
-                </div>
-
-                <!-- Last Page -->
-                <div class="rounded-xl border bg-card p-5 shadow-sm">
-                    <div class="flex items-start justify-between">
-                        <div>
-                            <p class="text-sm text-muted-foreground">
-                                Total Halaman
-                            </p>
-
-                            <p class="mt-2 text-2xl font-bold">
-                                {{ props.tickets.last_page }}
-                            </p>
-                        </div>
-
-                        <div
-                            class="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-sm font-semibold"
-                        >
-                            ≡
-                        </div>
-                    </div>
-                </div>
+                </button>
             </div>
 
             <!-- =====================================================
@@ -238,7 +304,7 @@ const formatDate = (date: string) => {
             <div class="overflow-hidden rounded-xl border bg-card shadow-sm">
                 <!-- Table Header -->
                 <div
-                    class="flex flex-col gap-2 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+                    class="mb-2 flex flex-col gap-2 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
                 >
                     <div>
                         <h2 class="font-semibold">Daftar Ticket</h2>
@@ -252,7 +318,29 @@ const formatDate = (date: string) => {
                         {{ props.tickets.total }} ticket
                     </div>
                 </div>
+                <!-- SEARCH -->
+                <form
+                    class="mb-2 flex flex-col gap-3 sm:flex-row"
+                    @submit.prevent="doSearch"
+                >
+                    <div class="relative flex-1">
+                        <input
+                            v-model="search"
+                            type="text"
+                            placeholder="Cari no ticket, pelanggan, site, atau no jaringan..."
+                            class="w-full rounded-lg border bg-background px-4 py-2.5 text-sm transition outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary"
+                        />
+                    </div>
 
+                    <button
+                        type="submit"
+                        class="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90"
+                    >
+                        Cari
+                    </button>
+                </form>
+
+                <!-- TOTAL -->
                 <!-- =================================================
                      TABLE
                 ================================================== -->
@@ -262,6 +350,12 @@ const formatDate = (date: string) => {
                         <!-- HEADER -->
                         <thead>
                             <tr class="border-b bg-muted/40">
+                                <th
+                                    class="px-5 py-3 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                                >
+                                    No
+                                </th>
+
                                 <th
                                     class="px-5 py-3 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
                                 >
@@ -310,22 +404,28 @@ const formatDate = (date: string) => {
                         <tbody>
                             <!-- DATA -->
                             <tr
-                                v-for="ticket in props.tickets.data"
+                                v-for="(ticket, index) in props.tickets.data"
                                 :key="ticket.id"
                                 class="border-b transition last:border-b-0 hover:bg-muted/20"
                             >
                                 <!-- =================================
                                      TICKET
                                 ================================== -->
+                                <td class="px-5 py-4 align-top">
+                                    <div
+                                        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-semibold"
+                                    >
+                                        {{
+                                            (props.tickets.current_page - 1) *
+                                                props.tickets.per_page +
+                                            index +
+                                            1
+                                        }}
+                                    </div>
+                                </td>
 
                                 <td class="px-5 py-4 align-top">
                                     <div class="flex items-start gap-3">
-                                        <div
-                                            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-semibold"
-                                        >
-                                            T
-                                        </div>
-
                                         <div class="min-w-0">
                                             <div class="font-semibold">
                                                 {{ ticket.ticket_number }}
@@ -527,6 +627,7 @@ const formatDate = (date: string) => {
                     </p>
 
                     <!-- Pagination -->
+                    <!-- Pagination -->
                     <div
                         v-if="props.tickets.last_page > 1"
                         class="flex flex-wrap gap-1.5"
@@ -544,14 +645,28 @@ const formatDate = (date: string) => {
                                         ? 'bg-primary text-primary-foreground'
                                         : 'bg-background hover:bg-muted',
                                 ]"
-                                v-html="link.label"
-                            />
+                            >
+                                {{
+                                    link.label.includes('previous')
+                                        ? '‹ Sebelumnya'
+                                        : link.label.includes('next')
+                                          ? 'Berikutnya ›'
+                                          : link.label
+                                }}
+                            </Link>
 
                             <span
                                 v-else
                                 class="rounded-lg border px-3 py-2 text-sm text-muted-foreground opacity-60"
-                                v-html="link.label"
-                            />
+                            >
+                                {{
+                                    link.label.includes('previous')
+                                        ? '‹ Sebelumnya'
+                                        : link.label.includes('next')
+                                          ? 'Berikutnya ›'
+                                          : link.label
+                                }}
+                            </span>
                         </template>
                     </div>
                 </div>

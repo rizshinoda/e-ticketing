@@ -20,18 +20,80 @@ class TicketController extends Controller
     /**
      * Daftar ticket.
      */
-    public function index(): Response
+    public function index(Request $request): Response
     {
+        $status = $request->query('status');
+        $search = $request->query('search');
+
         $tickets = Ticket::query()
-            ->with([
-                'creator',
-                'customers',
-            ])
+            ->with(['creator', 'customers'])
+            ->when(
+                $status,
+                fn($query) => $query->where('status', $status)
+            )
+            ->when($search, function ($query) use ($search) {
+                $query->where(function ($query) use ($search) {
+                    $query->where(
+                        'ticket_number',
+                        'like',
+                        "%{$search}%"
+                    )
+                        ->orWhereHas('customers', function ($query) use ($search) {
+                            $query->where(
+                                'customer_name',
+                                'like',
+                                "%{$search}%"
+                            )
+                                ->orWhere(
+                                    'site_name',
+                                    'like',
+                                    "%{$search}%"
+                                )
+                                ->orWhere(
+                                    'no_jaringan',
+                                    'like',
+                                    "%{$search}%"
+                                );
+                        });
+                });
+            })
             ->latest()
-            ->paginate(20);
+            ->paginate(10)
+            ->withQueryString();
+
+        $ticketStats = [
+            'total' => Ticket::count(),
+
+            'open' => Ticket::where(
+                'status',
+                'open'
+            )->count(),
+
+            'on_progress' => Ticket::where(
+                'status',
+                'on_progress'
+            )->count(),
+
+            'resolved' => Ticket::where(
+                'status',
+                'resolved'
+            )->count(),
+
+            'closed' => Ticket::where(
+                'status',
+                'closed'
+            )->count(),
+        ];
 
         return Inertia::render('Tickets/Index', [
             'tickets' => $tickets,
+
+            'ticketStats' => $ticketStats,
+
+            'filters' => [
+                'status' => $status,
+                'search' => $search,
+            ],
         ]);
     }
     public function searchOnlineBillings(Request $request)

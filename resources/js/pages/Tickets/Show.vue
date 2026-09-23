@@ -932,7 +932,7 @@ watch(
                 <!-- BUTTON KEMBALI -->
                 <Link
                     href="/tickets"
-                    class="shrink-0 self-start rounded-lg border bg-background px-4 py-2 text-sm font-medium shadow-sm transition hover:bg-muted"
+                    class="shrink-0 self-start rounded-lg border bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-muted"
                 >
                     Kembali
                 </Link>
