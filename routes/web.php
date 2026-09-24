@@ -33,7 +33,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 TicketController::class,
                 'show',
             ])->name('show');
+            Route::get('/{ticket}/edit', [TicketController::class, 'edit'])
+                ->name('edit');
 
+            Route::put('/{ticket}', [TicketController::class, 'update'])
+                ->name('update');
+            Route::delete('/{ticket}', [TicketController::class, 'destroy'])
+                ->name('destroy');
             Route::post('/{ticket}/updates', [
                 TicketController::class,
                 'storeUpdate',

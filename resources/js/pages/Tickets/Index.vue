@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { Link, router } from '@inertiajs/vue3';
 import { ref } from 'vue';
+import { Eye, Pencil, Trash2 } from 'lucide-vue-next';
+import Swal from 'sweetalert2';
 interface Customer {
     id: number;
     customer_name: string | null;
@@ -71,11 +73,95 @@ const filterStatus = (status: string | null) => {
         },
     );
 };
+const deleteTicket = (ticket: any) => {
+    // Hanya Open yang boleh dihapus
+    if (ticket.status !== 'open') {
+        Swal.fire({
+            icon: 'error',
+            title: 'Tidak Bisa Dihapus',
+            text: 'Hanya ticket dengan status Open yang dapat dihapus.',
+            confirmButtonText: 'OK',
+        });
+
+        return;
+    }
+
+    // Ticket yang pernah di-reopen tidak boleh dihapus
+    if (ticket.incidents_count > 1) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Tidak Bisa Dihapus',
+            text: 'Ticket yang pernah di-re-open tidak dapat dihapus.',
+            confirmButtonText: 'OK',
+        });
+
+        return;
+    }
+
+    // Kalau boleh hapus, tampilkan konfirmasi
+    Swal.fire({
+        title: 'Hapus Ticket?',
+        text: 'Ticket yang dihapus tidak dapat dikembalikan.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Ya, Hapus',
+        cancelButtonText: 'Batal',
+        reverseButtons: true,
+    }).then((result) => {
+        if (!result.isConfirmed) {
+            return;
+        }
+
+        router.delete(`/tickets/${ticket.id}`, {
+            preserveScroll: true,
+
+            onSuccess: () => {
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Berhasil',
+                    text: 'Ticket berhasil dihapus.',
+                    confirmButtonText: 'OK',
+                });
+            },
+        });
+    });
+};
+
+const editTicket = (ticket: any) => {
+    // Ticket yang sudah selesai tidak boleh diedit
+    if (ticket.status === 'resolved' || ticket.status === 'closed') {
+        Swal.fire({
+            icon: 'error',
+            title: 'Tidak Bisa Edit',
+            text: 'Ticket yang sudah selesai tidak dapat diedit.',
+            confirmButtonText: 'OK',
+        });
+
+        return;
+    }
+
+    // Ticket yang pernah di-reopen memiliki lebih dari 1 incident
+    if (ticket.incidents_count > 1) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Tidak Bisa Edit',
+            text: 'Ticket yang pernah di-re-open tidak dapat diedit.',
+            confirmButtonText: 'OK',
+        });
+
+        return;
+    }
+
+    // Kalau boleh edit
+    router.visit(`/tickets/${ticket.id}/edit`);
+};
 const doSearch = () => {
+    const keyword = search.value.trim();
+
     router.get(
         '/tickets',
         {
-            ...(search.value ? { search: search.value } : {}),
+            ...(keyword ? { search: keyword } : {}),
             ...(props.filters.status ? { status: props.filters.status } : {}),
         },
         {
@@ -554,12 +640,38 @@ const formatDate = (date: string) => {
                                 ================================== -->
 
                                 <td class="px-5 py-4 text-right align-top">
-                                    <Link
-                                        :href="`/tickets/${ticket.id}`"
-                                        class="inline-flex items-center rounded-lg border bg-background px-3 py-2 text-sm font-medium transition hover:bg-muted"
+                                    <div
+                                        class="flex items-center justify-end gap-2"
                                     >
-                                        Detail
-                                    </Link>
+                                        <!-- Detail -->
+                                        <Link
+                                            :href="`/tickets/${ticket.id}`"
+                                            class="inline-flex items-center justify-center rounded-lg border bg-background p-2.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                                            title="Lihat Detail"
+                                        >
+                                            <Eye class="h-4 w-4" />
+                                        </Link>
+
+                                        <!-- Edit -->
+                                        <button
+                                            type="button"
+                                            class="inline-flex items-center justify-center rounded-lg border bg-background p-2.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                                            title="Edit Ticket"
+                                            @click="editTicket(ticket)"
+                                        >
+                                            <Pencil class="h-4 w-4" />
+                                        </button>
+
+                                        <!-- Hapus -->
+                                        <button
+                                            type="button"
+                                            class="inline-flex items-center justify-center rounded-lg border bg-background p-2.5 text-muted-foreground transition hover:bg-muted hover:text-destructive"
+                                            title="Hapus Ticket"
+                                            @click="deleteTicket(ticket)"
+                                        >
+                                            <Trash2 class="h-4 w-4" />
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
 

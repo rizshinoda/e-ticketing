@@ -27,6 +27,7 @@ class TicketController extends Controller
 
         $tickets = Ticket::query()
             ->with(['creator', 'customers'])
+            ->withCount('incidents')
             ->when(
                 $status,
                 fn($query) => $query->where('status', $status)
@@ -2044,5 +2045,739 @@ class TicketController extends Controller
             'success',
             'Site berhasil dilepas dari ticket.'
         );
+    }
+    public function edit(Ticket $ticket): Response
+    {
+        /*
+    |--------------------------------------------------------------------------
+    | CEK APAKAH TICKET MASIH BOLEH DIEDIT
+    |--------------------------------------------------------------------------
+    */
+
+        // Resolved / Closed tidak boleh diedit
+        if (in_array($ticket->status, ['resolved', 'closed'])) {
+            abort(403, 'Ticket yang sudah selesai tidak dapat diedit.');
+        }
+
+        // Ticket yang pernah di-reopen memiliki lebih dari 1 incident
+        if ($ticket->incidents()->count() > 1) {
+            abort(403, 'Ticket yang pernah di-re-open tidak dapat diedit.');
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | LOAD DATA TICKET
+    |--------------------------------------------------------------------------
+    */
+
+        $ticket->load([
+            'customers.pelanggan',
+            'customers.onlineBilling',
+            'incidents.category',
+        ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | MASTER CUSTOMER
+    |--------------------------------------------------------------------------
+    */
+
+        $pelanggans = Pelanggan::query()
+            ->orderBy('nama_pelanggan')
+            ->get([
+                'id',
+                'nama_pelanggan',
+            ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | MASTER KENDALA
+    |--------------------------------------------------------------------------
+    */
+
+        $categories = TicketCategory::query()
+            ->orderBy('name')
+            ->get([
+                'id',
+                'name',
+                'is_downtime',
+            ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | ONLINE BILLING
+    |--------------------------------------------------------------------------
+    |
+    | Ambil Online Billing yang masih aktif.
+    |
+    | Site yang sudah dipilih ticket tetap dimasukkan walaupun nantinya
+    | statusnya berubah, supaya data lama tetap dapat ditampilkan di form.
+    |
+    */
+
+        $selectedBillingIds = $ticket->customers
+            ->pluck('online_billing_id')
+            ->filter()
+            ->values();
+
+        $onlineBillings = OnlineBilling::query()
+            ->with('pelanggan')
+            ->where(function ($query) use ($selectedBillingIds) {
+                $query->where('status', 'active');
+
+                if ($selectedBillingIds->isNotEmpty()) {
+                    $query->orWhereIn('id', $selectedBillingIds);
+                }
+            })
+            ->get([
+                'id',
+                'pelanggan_id',
+                'nama_site',
+                'no_jaringan',
+                'layanan',
+                'bandwidth',
+                'status',
+            ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | FORMAT ONLINE BILLING UNTUK VUE
+    |--------------------------------------------------------------------------
+    */
+
+        $onlineBillings = $onlineBillings
+            ->map(function ($billing) {
+                return [
+                    'id' => $billing->id,
+                    'customer_name' => $billing->pelanggan?->nama_pelanggan,
+                    'site_name' => $billing->nama_site,
+                    'no_jaringan' => $billing->no_jaringan,
+                    'layanan' => $billing->layanan,
+                    'bandwidth' => $billing->bandwidth,
+                    'pelanggan_id' => $billing->pelanggan_id,
+                    'status' => $billing->status,
+                ];
+            })
+            ->values();
+
+        /*
+    |--------------------------------------------------------------------------
+    | SEARCH
+    |--------------------------------------------------------------------------
+    */
+
+        $search = trim(request()->input('search', ''));
+
+        if ($search !== '') {
+
+            $searchBillings = OnlineBilling::query()
+                ->with('pelanggan')
+                ->where('status', 'active')
+                ->where(function ($query) use ($search) {
+
+                    $query->where(
+                        'nama_site',
+                        'like',
+                        "%{$search}%"
+                    )
+                        ->orWhere(
+                            'no_jaringan',
+                            'like',
+                            "%{$search}%"
+                        )
+                        ->orWhere(
+                            'layanan',
+                            'like',
+                            "%{$search}%"
+                        )
+                        ->orWhereHas(
+                            'pelanggan',
+                            function ($q) use ($search) {
+                                $q->where(
+                                    'nama_pelanggan',
+                                    'like',
+                                    "%{$search}%"
+                                );
+                            }
+                        );
+                })
+                ->limit(20)
+                ->get([
+                    'id',
+                    'pelanggan_id',
+                    'nama_site',
+                    'no_jaringan',
+                    'layanan',
+                    'bandwidth',
+                    'status',
+                ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | Gabungkan hasil search dengan site yang sudah dipilih
+        |--------------------------------------------------------------------------
+        */
+
+            $onlineBillings = $onlineBillings
+                ->merge(
+                    $searchBillings->map(function ($billing) {
+                        return [
+                            'id' => $billing->id,
+                            'customer_name' =>
+                            $billing->pelanggan?->nama_pelanggan,
+                            'site_name' =>
+                            $billing->nama_site,
+                            'no_jaringan' =>
+                            $billing->no_jaringan,
+                            'layanan' =>
+                            $billing->layanan,
+                            'bandwidth' =>
+                            $billing->bandwidth,
+                            'pelanggan_id' =>
+                            $billing->pelanggan_id,
+                            'status' =>
+                            $billing->status,
+                        ];
+                    })
+                )
+                ->unique('id')
+                ->values();
+        }
+
+        return Inertia::render('Tickets/Edit', [
+            'ticket' => $ticket,
+            'categories' => $categories,
+            'pelanggans' => $pelanggans,
+            'onlineBillings' => $onlineBillings,
+            'filters' => [
+                'search' => $search,
+            ],
+        ]);
+    }
+
+    public function update(Request $request, Ticket $ticket)
+    {
+        /*
+    |--------------------------------------------------------------------------
+    | CEK APAKAH TICKET BOLEH DIEDIT
+    |--------------------------------------------------------------------------
+    */
+
+        if (in_array($ticket->status, ['resolved', 'closed'])) {
+            abort(403, 'Ticket yang sudah selesai tidak dapat diedit.');
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | TICKET YANG PERNAH DI-REOPEN TIDAK BOLEH DIEDIT
+    |--------------------------------------------------------------------------
+    */
+
+        if ($ticket->incidents()->count() > 1) {
+            abort(403, 'Ticket yang pernah di-re-open tidak dapat diedit.');
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | VALIDASI
+    |--------------------------------------------------------------------------
+    */
+
+        $validated = $request->validate([
+
+            /*
+        |--------------------------------------------------------------------------
+        | TICKET TYPE
+        |--------------------------------------------------------------------------
+        */
+
+            'ticket_type' => [
+                'required',
+                'in:individual,gamas',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | CUSTOMER SOURCE
+        |--------------------------------------------------------------------------
+        */
+
+            'customer_source' => [
+                'required',
+                'in:online_billing,manual',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | ONLINE BILLING
+        |--------------------------------------------------------------------------
+        */
+
+            'online_billing_ids' => [
+                'exclude_unless:customer_source,online_billing',
+                'required',
+                'array',
+                'min:1',
+            ],
+
+            'online_billing_ids.*' => [
+                'required',
+                'integer',
+                'distinct',
+                'exists:online_billings,id',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | CUSTOMER MANUAL
+        |--------------------------------------------------------------------------
+        */
+
+            'pelanggan_id' => [
+                'required_if:customer_source,manual',
+                'nullable',
+                'integer',
+                'exists:pelanggans,id',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | CUSTOMER NAME
+        |--------------------------------------------------------------------------
+        |
+        | Tetap diterima supaya struktur form sama dengan Create.
+        | Sumber customer sebenarnya tetap dari pelanggan_id.
+        |
+        */
+
+            'customer_name' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | MANUAL SITES
+        |--------------------------------------------------------------------------
+        */
+
+            'manual_sites' => [
+                'exclude_unless:customer_source,manual',
+                'required',
+                'array',
+                'min:1',
+            ],
+
+            'manual_sites.*.site_name' => [
+                'required',
+                'string',
+                'max:255',
+            ],
+
+            'manual_sites.*.no_jaringan' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | INCIDENT
+        |--------------------------------------------------------------------------
+        */
+
+            'kendala_id' => [
+                'required',
+                'exists:ticket_categories,id',
+            ],
+
+            'reported_via' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | PRIORITY
+        |--------------------------------------------------------------------------
+        */
+
+            'priority' => [
+                'required',
+                'in:low,medium,high,critical',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | REPORTED AT
+        |--------------------------------------------------------------------------
+        */
+
+            'reported_at' => [
+                'required',
+                'date',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | REPORT TYPE
+        |--------------------------------------------------------------------------
+        */
+
+            'report_type' => [
+                'required',
+                'in:current,historical',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | HISTORICAL INCIDENT
+        |--------------------------------------------------------------------------
+        */
+
+            'incident_reported_at' => [
+                'required_if:report_type,historical',
+                'nullable',
+                'date',
+            ],
+
+            'incident_resolved_at' => [
+                'required_if:report_type,historical',
+                'nullable',
+                'date',
+                'after:incident_reported_at',
+            ],
+
+            /*
+        |--------------------------------------------------------------------------
+        | DESCRIPTION
+        |--------------------------------------------------------------------------
+        */
+
+            'description' => [
+                'required',
+                'string',
+            ],
+        ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | VALIDASI JUMLAH SITE MANUAL UNTUK INDIVIDUAL
+    |--------------------------------------------------------------------------
+    */
+
+        if (
+            $validated['customer_source'] === 'manual' &&
+            $validated['ticket_type'] === 'individual' &&
+            count($validated['manual_sites']) !== 1
+        ) {
+            return back()
+                ->withErrors([
+                    'manual_sites' =>
+                    'Ticket individual hanya dapat memiliki satu site.',
+                ])
+                ->withInput();
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | AMBIL CUSTOMER MASTER
+    |--------------------------------------------------------------------------
+    */
+
+        $pelanggan = null;
+
+        if ($validated['customer_source'] === 'manual') {
+            $pelanggan = Pelanggan::findOrFail(
+                $validated['pelanggan_id']
+            );
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | AMBIL ONLINE BILLING
+    |--------------------------------------------------------------------------
+    */
+
+        $onlineBillings = collect();
+
+        if ($validated['customer_source'] === 'online_billing') {
+
+            $onlineBillings = OnlineBilling::query()
+                ->with('pelanggan')
+                ->where('status', 'active')
+                ->whereIn(
+                    'id',
+                    $validated['online_billing_ids']
+                )
+                ->get();
+
+            /*
+        |--------------------------------------------------------------------------
+        | Pastikan semua Online Billing masih valid dan aktif
+        |--------------------------------------------------------------------------
+        */
+
+            if (
+                $onlineBillings->count() !==
+                count($validated['online_billing_ids'])
+            ) {
+                return back()
+                    ->withErrors([
+                        'online_billing_ids' =>
+                        'Salah satu Online Billing tidak ditemukan atau sudah tidak aktif.',
+                    ])
+                    ->withInput();
+            }
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | INDIVIDUAL HANYA 1 SITE
+    |--------------------------------------------------------------------------
+    */
+
+        if (
+            $validated['ticket_type'] === 'individual' &&
+            $validated['customer_source'] === 'online_billing' &&
+            $onlineBillings->count() !== 1
+        ) {
+            return back()
+                ->withErrors([
+                    'online_billing_ids' =>
+                    'Ticket individual hanya dapat memiliki satu site.',
+                ])
+                ->withInput();
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | GAMAS + ONLINE BILLING
+    |--------------------------------------------------------------------------
+    |
+    | Semua site harus berasal dari customer yang sama.
+    |
+    */
+
+        if (
+            $validated['ticket_type'] === 'gamas' &&
+            $validated['customer_source'] === 'online_billing'
+        ) {
+
+            $customerIds = $onlineBillings
+                ->pluck('pelanggan_id')
+                ->filter()
+                ->unique();
+
+            if ($customerIds->count() !== 1) {
+                return back()
+                    ->withErrors([
+                        'online_billing_ids' =>
+                        'Ticket GAMAS hanya dapat memiliki site dari customer yang sama.',
+                    ])
+                    ->withInput();
+            }
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | UPDATE DALAM TRANSACTION
+    |--------------------------------------------------------------------------
+    */
+
+        DB::transaction(function () use (
+            $ticket,
+            $validated,
+            $onlineBillings,
+            $pelanggan
+        ) {
+
+            /*
+        |--------------------------------------------------------------------------
+        | 1. UPDATE DATA UTAMA TICKET
+        |--------------------------------------------------------------------------
+        */
+
+            $ticket->update([
+                'ticket_type' => $validated['ticket_type'],
+                'description' => $validated['description'],
+                'priority' => $validated['priority'],
+                'reported_at' => $validated['reported_at'],
+            ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | 2. UPDATE CUSTOMER / SITE
+        |--------------------------------------------------------------------------
+        |
+        | Karena customer/site dapat berubah, kita rebuild snapshot
+        | ticket_customers.
+        |
+        */
+
+            $ticket->customers()->delete();
+
+            /*
+        |--------------------------------------------------------------------------
+        | CUSTOMER DARI ONLINE BILLING
+        |--------------------------------------------------------------------------
+        */
+
+            if ($validated['customer_source'] === 'online_billing') {
+
+                foreach ($onlineBillings as $onlineBilling) {
+
+                    $ticket->customers()->create([
+
+                        'pelanggan_id' =>
+                        $onlineBilling->pelanggan_id,
+
+                        'online_billing_id' =>
+                        $onlineBilling->id,
+
+                        'customer_name' =>
+                        $onlineBilling->pelanggan?->nama_pelanggan,
+
+                        'site_name' =>
+                        $onlineBilling->nama_site,
+
+                        'no_jaringan' =>
+                        $onlineBilling->no_jaringan,
+
+                        'reported_via' =>
+                        $validated['reported_via'] ?? null,
+                    ]);
+                }
+            } else {
+
+                /*
+            |--------------------------------------------------------------------------
+            | CUSTOMER MANUAL
+            |--------------------------------------------------------------------------
+            */
+
+                foreach ($validated['manual_sites'] as $site) {
+
+                    $ticket->customers()->create([
+
+                        'pelanggan_id' =>
+                        $pelanggan->id,
+
+                        'online_billing_id' =>
+                        null,
+
+                        'customer_name' =>
+                        $pelanggan->nama_pelanggan,
+
+                        'site_name' =>
+                        $site['site_name'],
+
+                        'no_jaringan' =>
+                        $site['no_jaringan'] ?? null,
+
+                        'reported_via' =>
+                        $validated['reported_via'] ?? null,
+                    ]);
+                }
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | 3. UPDATE INCIDENT TERAKHIR
+        |--------------------------------------------------------------------------
+        */
+
+            $incident = $ticket->incidents()
+                ->latest('incident_number')
+                ->firstOrFail();
+
+            $incident->update([
+
+                'kendala_id' =>
+                $validated['kendala_id'],
+
+                'reported_at' =>
+                $validated['report_type'] === 'historical'
+                    ? $validated['incident_reported_at']
+                    : $validated['reported_at'],
+
+                'resolved_at' =>
+                $validated['report_type'] === 'historical'
+                    ? $validated['incident_resolved_at']
+                    : null,
+            ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | 4. HISTORY
+        |--------------------------------------------------------------------------
+        */
+
+            $ticket->updates()->create([
+                'user_id' => Auth::id(),
+                'message' => 'Data ticket diperbarui.',
+            ]);
+        });
+
+        /*
+    |--------------------------------------------------------------------------
+    | REDIRECT
+    |--------------------------------------------------------------------------
+    */
+
+        return to_route(
+            'tickets.show',
+            $ticket
+        )->with(
+            'success',
+            'Ticket berhasil diperbarui.'
+        );
+    }
+    public function destroy(Ticket $ticket)
+    {
+        /*
+    |--------------------------------------------------------------------------
+    | HANYA TICKET OPEN YANG BOLEH DIHAPUS
+    |--------------------------------------------------------------------------
+    */
+
+        if ($ticket->status !== 'open') {
+            return back()
+                ->withErrors([
+                    'delete' =>
+                    'Hanya ticket dengan status Open yang dapat dihapus.',
+                ]);
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | TICKET YANG PERNAH DI-REOPEN TIDAK BOLEH DIHAPUS
+    |--------------------------------------------------------------------------
+    */
+
+        if ($ticket->incidents()->count() > 1) {
+            return back()
+                ->withErrors([
+                    'delete' =>
+                    'Ticket yang pernah di-re-open tidak dapat dihapus.',
+                ]);
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | HAPUS TICKET
+    |--------------------------------------------------------------------------
+    |
+    | ticket_customers, incidents, updates, stop_clocks, dan rfos
+    | akan ikut terhapus karena menggunakan cascadeOnDelete().
+    |
+    */
+
+        $ticket->delete();
+
+        return to_route('tickets.index')
+            ->with('success', 'Ticket berhasil dihapus.');
     }
 }
