@@ -1639,7 +1639,12 @@ watch(
 
                         <!-- FORM BUAT RFO -->
 
-                        <div v-if="ticket.status === 'resolved'">
+                        <div
+                            v-if="
+                                ticket.status === 'resolved' ||
+                                ticket.status === 'closed'
+                            "
+                        >
                             <button
                                 type="button"
                                 class="rounded-lg border bg-background px-4 py-2 text-sm font-medium transition hover:bg-muted"
@@ -1715,7 +1720,9 @@ watch(
 
                                         <button
                                             v-if="
-                                                ticket.status === 'resolved' &&
+                                                (ticket.status === 'resolved' ||
+                                                    ticket.status ===
+                                                        'closed') &&
                                                 editingRfoId !== rfo.id
                                             "
                                             type="button"

@@ -445,7 +445,7 @@ const formatDate = (date: string) => {
                                 <th
                                     class="px-5 py-3 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
                                 >
-                                    Ticket
+                                    No Ticket
                                 </th>
 
                                 <th

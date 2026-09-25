@@ -558,13 +558,47 @@ class TicketController extends Controller
             $pelanggan
         ) {
 
-            /*
-        |--------------------------------------------------------------------------
-        | Generate nomor ticket
-        |--------------------------------------------------------------------------
-        */
 
-            $ticketNumber = 'TCK-' . now()->format('YmdHis');
+
+            /*
+|--------------------------------------------------------------------------
+| Generate nomor ticket
+|--------------------------------------------------------------------------
+| Format:
+| DDMMYY.NNN
+|
+| Contoh:
+| 170926.001
+| 170926.002
+| 170926.003
+|--------------------------------------------------------------------------
+*/
+
+            $today = now();
+
+            $datePrefix = $today->format('dmy');
+
+            // Cari ticket terakhir yang dibuat hari ini
+            $lastTicket = Ticket::query()
+                ->where('ticket_number', 'like', $datePrefix . '.%')
+                ->orderByDesc('ticket_number')
+                ->first();
+
+            if ($lastTicket) {
+                $lastSequence = (int) str($lastTicket->ticket_number)
+                    ->after('.');
+
+                $sequence = $lastSequence + 1;
+            } else {
+                $sequence = 1;
+            }
+
+            $ticketNumber = $datePrefix . '.' . str_pad(
+                $sequence,
+                3,
+                '0',
+                STR_PAD_LEFT
+            );
 
             /*
         |--------------------------------------------------------------------------
@@ -1454,7 +1488,7 @@ class TicketController extends Controller
 
     public function storeRfo(Request $request, Ticket $ticket)
     {
-        if ($ticket->status !== 'resolved') {
+        if ($ticket->status !== 'resolved' && $ticket->status !== 'closed') {
             return back()->withErrors([
                 'rfo' => 'RFO hanya dapat dibuat ketika ticket sudah Resolved.',
             ]);
@@ -1493,7 +1527,7 @@ class TicketController extends Controller
         Ticket $ticket,
         Rfo $rfo
     ) {
-        if ($ticket->status !== 'resolved') {
+        if ($ticket->status !== 'resolved' && $ticket->status !== 'closed') {
             return back()->withErrors([
                 'rfo' => 'RFO hanya dapat diedit ketika ticket masih Resolved.',
             ]);
