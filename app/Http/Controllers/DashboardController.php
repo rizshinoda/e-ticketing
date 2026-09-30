@@ -61,11 +61,34 @@ class DashboardController extends Controller
                 'total' => $ticketStats['closed'],
             ],
         ];
+        $monthlyTickets = Ticket::query()
+            ->selectRaw("DATE_FORMAT(reported_at, '%Y-%m') as month")
+            ->selectRaw('COUNT(*) as total')
+            ->where('reported_at', '>=', now()->subMonths(11)->startOfMonth())
+            ->groupBy('month')
+            ->orderBy('month')
+            ->get();
 
+        $monthlyTicketChart = collect();
+
+        for ($i = 11; $i >= 0; $i--) {
+            $date = now()->subMonths($i);
+
+            $monthKey = $date->format('Y-m');
+
+            $monthlyTicketChart->push([
+                'month' => $date->translatedFormat('M Y'),
+                'total' => (int) (
+                    $monthlyTickets->firstWhere('month', $monthKey)?->total ?? 0
+                ),
+            ]);
+        }
         return Inertia::render('Dashboard', [
             'ticketStats' => $ticketStats,
             'priorityStats' => $priorityStats,
             'statusChart' => $statusChart,
+            'monthlyTicketChart' => $monthlyTicketChart,
+
         ]);
     }
 }

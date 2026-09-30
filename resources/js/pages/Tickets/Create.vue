@@ -491,7 +491,19 @@ const submit = () => {
                                         v-model="form.incident_resolved_at"
                                         type="datetime-local"
                                         class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm shadow-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                        :class="{
+                                            'border-destructive focus:border-destructive focus:ring-2 focus:ring-destructive/20':
+                                                form.errors
+                                                    .incident_resolved_at,
+                                        }"
                                     />
+
+                                    <p
+                                        v-if="form.errors.incident_resolved_at"
+                                        class="mt-2 text-sm text-destructive"
+                                    >
+                                        {{ form.errors.incident_resolved_at }}
+                                    </p>
                                 </div>
                             </div>
                         </div>
@@ -1033,7 +1045,7 @@ const submit = () => {
                         </div>
 
                         <!-- WAKTU LAPORAN -->
-                        <div>
+                        <div v-if="form.report_type !== 'historical'">
                             <label class="mb-2 block text-sm font-medium">
                                 Waktu Laporan
                             </label>

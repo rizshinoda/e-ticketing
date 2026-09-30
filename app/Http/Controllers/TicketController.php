@@ -409,6 +409,13 @@ class TicketController extends Controller
                 'required',
                 'string',
             ],
+
+        ], [
+            'incident_resolved_at.required_if' =>
+            'Gangguan selesai wajib diisi untuk laporan historical.',
+
+            'incident_resolved_at.after' =>
+            'Gangguan selesai harus setelah gangguan mulai.',
         ]);
 
         /*
@@ -578,15 +585,13 @@ class TicketController extends Controller
 
             $datePrefix = $today->format('dmy');
 
-            // Cari ticket terakhir yang dibuat hari ini
             $lastTicket = Ticket::query()
                 ->where('ticket_number', 'like', $datePrefix . '.%')
                 ->orderByDesc('ticket_number')
                 ->first();
 
             if ($lastTicket) {
-                $lastSequence = (int) str($lastTicket->ticket_number)
-                    ->after('.');
+                $lastSequence = (int) explode('.', $lastTicket->ticket_number)[1];
 
                 $sequence = $lastSequence + 1;
             } else {
@@ -2485,15 +2490,24 @@ class TicketController extends Controller
             ],
 
             /*
-        |--------------------------------------------------------------------------
-        | DESCRIPTION
-        |--------------------------------------------------------------------------
-        */
+    |--------------------------------------------------------------------------
+    | DESCRIPTION
+    |--------------------------------------------------------------------------
+    */
 
             'description' => [
                 'required',
                 'string',
             ],
+
+        ], [
+
+            'incident_resolved_at.required_if' =>
+            'Gangguan selesai wajib diisi untuk laporan historical.',
+
+            'incident_resolved_at.after' =>
+            'Gangguan selesai harus setelah gangguan mulai.',
+
         ]);
 
         /*

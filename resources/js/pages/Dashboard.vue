@@ -3,7 +3,14 @@ import { Head, Link } from '@inertiajs/vue3';
 
 import { dashboard } from '@/routes';
 
-import { VisAxis, VisGroupedBar, VisXYContainer } from '@unovis/vue';
+import {
+    VisAxis,
+    VisDonut,
+    VisGroupedBar,
+    VisLine,
+    VisSingleContainer,
+    VisXYContainer,
+} from '@unovis/vue';
 
 import type { ChartConfig } from '@/components/ui/chart';
 
@@ -21,11 +28,18 @@ defineOptions({
 });
 
 interface StatusChartItem {
+    status: string;
+    total: number;
+}
+interface MonthlyTicketChartItem {
+    month: string;
+    total: number;
+}
+interface ChartDataItem {
     index: number;
     status: string;
     total: number;
 }
-
 interface TicketStats {
     total: number;
     open: number;
@@ -41,35 +55,40 @@ interface PriorityStats {
     low: number;
 }
 
-const testStatusChart: StatusChartItem[] = [
-    {
-        index: 0,
-        status: 'Open',
-        total: 5,
-    },
-    {
-        index: 1,
-        status: 'On Progress',
-        total: 8,
-    },
-    {
-        index: 2,
-        status: 'Resolved',
-        total: 3,
-    },
-    {
-        index: 3,
-        status: 'Closed',
-        total: 12,
-    },
-];
-
 const props = defineProps<{
     ticketStats: TicketStats;
     priorityStats: PriorityStats;
     statusChart: StatusChartItem[];
+    monthlyTicketChart: MonthlyTicketChartItem[];
 }>();
-
+const priorityChartData = [
+    {
+        priority: 'Critical',
+        total: props.priorityStats.critical,
+    },
+    {
+        priority: 'High',
+        total: props.priorityStats.high,
+    },
+    {
+        priority: 'Medium',
+        total: props.priorityStats.medium,
+    },
+    {
+        priority: 'Low',
+        total: props.priorityStats.low,
+    },
+];
+const chartData: ChartDataItem[] = props.statusChart.map((item, index) => ({
+    index,
+    status: item.status,
+    total: item.total,
+}));
+const monthlyChartData = props.monthlyTicketChart.map((item, index) => ({
+    index,
+    month: item.month,
+    total: item.total,
+}));
 const chartConfig = {
     total: {
         label: 'Total Ticket',
@@ -138,119 +157,119 @@ const chartConfig = {
                 </p>
             </div>
         </div>
+        <div class="grid gap-6 lg:grid-cols-2">
+            <!-- Status Chart -->
+            <div class="rounded-xl border bg-card p-6 shadow-sm">
+                <div class="mb-5">
+                    <h2 class="text-lg font-semibold">
+                        Ticket berdasarkan Status
+                    </h2>
 
-        <!-- Priority -->
-        <div class="rounded-xl border bg-card p-6 shadow-sm">
-            <div class="mb-5">
-                <h2 class="text-lg font-semibold">Priority Ticket</h2>
+                    <p class="text-sm text-muted-foreground">
+                        Distribusi ticket berdasarkan status saat ini.
+                    </p>
+                </div>
 
-                <p class="text-sm text-muted-foreground">
-                    Jumlah ticket berdasarkan tingkat prioritas.
-                </p>
+                <ChartContainer :config="chartConfig" class="h-[280px] w-full">
+                    <VisXYContainer :data="chartData">
+                        <VisGroupedBar
+                            :x="(d: ChartDataItem) => d.index"
+                            :y="[(d: ChartDataItem) => d.total]"
+                            color="#3b82f6"
+                            :rounded-corners="4"
+                            bar-padding="0.25"
+                            group-padding="0.1"
+                        />
+
+                        <VisAxis
+                            type="x"
+                            :x="(d: ChartDataItem) => d.index"
+                            :tick-values="chartData.map((d) => d.index)"
+                            :tick-format="
+                                (value: number) => {
+                                    const item = chartData.find(
+                                        (d) => d.index === value,
+                                    );
+
+                                    return item?.status ?? '';
+                                }
+                            "
+                            :tick-line="false"
+                            :domain-line="false"
+                            :grid-line="false"
+                        />
+
+                        <VisAxis
+                            type="y"
+                            :tick-line="false"
+                            :domain-line="false"
+                            :grid-line="true"
+                        />
+                    </VisXYContainer>
+                </ChartContainer>
             </div>
+            <!-- Priority Chart -->
+            <div class="rounded-xl border bg-card p-6 shadow-sm">
+                <div class="mb-5">
+                    <h2 class="text-lg font-semibold">Priority Ticket</h2>
 
-            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <!-- Critical -->
-                <div class="rounded-lg border p-4">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <span
-                                class="h-3 w-3 rounded-full bg-red-500"
-                            ></span>
-
-                            <span class="text-sm font-medium"> Critical </span>
-                        </div>
-
-                        <span class="text-2xl font-semibold">
-                            {{ props.priorityStats.critical }}
-                        </span>
-                    </div>
+                    <p class="text-sm text-muted-foreground">
+                        Distribusi ticket berdasarkan tingkat prioritas.
+                    </p>
                 </div>
 
-                <!-- High -->
-                <div class="rounded-lg border p-4">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <span
-                                class="h-3 w-3 rounded-full bg-orange-500"
-                            ></span>
+                <ChartContainer :config="chartConfig" class="h-[280px] w-full">
+                    <VisSingleContainer :data="priorityChartData">
+                        <VisDonut
+                            :value="(d) => d.total"
+                            :color="
+                                (_d, index) => {
+                                    const colors = [
+                                        '#ef4444',
+                                        '#f97316',
+                                        '#eab308',
+                                        '#9ca3af',
+                                    ];
 
-                            <span class="text-sm font-medium"> High </span>
-                        </div>
-
-                        <span class="text-2xl font-semibold">
-                            {{ props.priorityStats.high }}
-                        </span>
-                    </div>
-                </div>
-
-                <!-- Medium -->
-                <div class="rounded-lg border p-4">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <span
-                                class="h-3 w-3 rounded-full bg-yellow-500"
-                            ></span>
-
-                            <span class="text-sm font-medium"> Medium </span>
-                        </div>
-
-                        <span class="text-2xl font-semibold">
-                            {{ props.priorityStats.medium }}
-                        </span>
-                    </div>
-                </div>
-
-                <!-- Low -->
-                <div class="rounded-lg border p-4">
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <span
-                                class="h-3 w-3 rounded-full bg-gray-400"
-                            ></span>
-
-                            <span class="text-sm font-medium"> Low </span>
-                        </div>
-
-                        <span class="text-2xl font-semibold">
-                            {{ props.priorityStats.low }}
-                        </span>
-                    </div>
-                </div>
+                                    return colors[index];
+                                }
+                            "
+                            :arc-width="0"
+                        />
+                    </VisSingleContainer>
+                </ChartContainer>
             </div>
         </div>
-        <!-- Status Chart -->
+        <!-- Monthly Ticket Chart -->
         <div class="rounded-xl border bg-card p-6 shadow-sm">
             <div class="mb-5">
-                <h2 class="text-lg font-semibold">Ticket berdasarkan Status</h2>
+                <h2 class="text-lg font-semibold">Rekapan Ticket Bulanan</h2>
 
                 <p class="text-sm text-muted-foreground">
-                    Distribusi ticket berdasarkan status saat ini.
+                    Jumlah ticket yang dilaporkan dalam 12 bulan terakhir.
                 </p>
             </div>
 
             <ChartContainer :config="chartConfig" class="h-[280px] w-full">
-                <VisXYContainer :data="testStatusChart">
-                    <VisGroupedBar
-                        :x="(d: StatusChartItem) => d.index"
-                        :y="[(d: StatusChartItem) => d.total]"
+                <VisXYContainer :data="monthlyChartData">
+                    <VisLine
+                        :x="(d: (typeof monthlyChartData)[number]) => d.index"
+                        :y="[(d: (typeof monthlyChartData)[number]) => d.total]"
                         color="#3b82f6"
-                        :rounded-corners="4"
-                        bar-padding="0.1"
-                        group-padding="0"
+                        :line-width="3"
                     />
 
                     <VisAxis
                         type="x"
-                        :x="(d: StatusChartItem) => d.index"
-                        :tick-values="testStatusChart.map((d) => d.index)"
+                        :x="(d: (typeof monthlyChartData)[number]) => d.index"
+                        :tick-values="monthlyChartData.map((d) => d.index)"
                         :tick-format="
                             (value: number) => {
-                                const item = testStatusChart.find(
+                                const item = monthlyChartData.find(
                                     (d) => d.index === value,
                                 );
 
-                                return item?.status ?? '';
+                                return item?.month ?? '';
                             }
                         "
                         :tick-line="false"
