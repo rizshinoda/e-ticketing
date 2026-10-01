@@ -173,3 +173,23 @@
         @apply bg-background text-foreground;
     }
 }
+
+/* Date input calendar icon */
+input[type='date']::-webkit-calendar-picker-indicator {
+    filter: none;
+}
+
+/* Calendar icon saat dark mode */
+.dark input[type='date']::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+}
+
+/* Date input calendar icon */
+input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    filter: none;
+}
+
+/* Calendar icon saat dark mode */
+.dark input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+}

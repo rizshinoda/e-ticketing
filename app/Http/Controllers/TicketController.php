@@ -22,40 +22,57 @@ class TicketController extends Controller
      */
     public function index(Request $request): Response
     {
-        $status = $request->query('status');
         $search = $request->query('search');
-
+        $ticketType = $request->query('ticket_type');
+        $status = $request->query('status');
+        $priority = $request->query('priority');
+        $date = $request->query('date');
+        $kendala = $request->query('kendala');
         $tickets = Ticket::query()
-            ->with(['creator', 'customers'])
+            ->with([
+                'creator',
+                'customers',
+                'latestIncident.category',
+
+            ])
             ->withCount('incidents')
-            ->when(
-                $status,
-                fn($query) => $query->where('status', $status)
-            )
-            ->when($search, function ($query) use ($search) {
+
+            // SEARCH
+            ->when($search, function ($query, $search) {
                 $query->where(function ($query) use ($search) {
-                    $query->where(
-                        'ticket_number',
-                        'like',
-                        "%{$search}%"
-                    )
+
+                    // Ticket Number
+                    $query->where('ticket_number', 'like', "%{$search}%")
+
+                        // Customer / Site / No Jaringan
                         ->orWhereHas('customers', function ($query) use ($search) {
-                            $query->where(
-                                'customer_name',
-                                'like',
-                                "%{$search}%"
-                            )
-                                ->orWhere(
-                                    'site_name',
-                                    'like',
-                                    "%{$search}%"
-                                )
-                                ->orWhere(
-                                    'no_jaringan',
-                                    'like',
-                                    "%{$search}%"
-                                );
+                            $query->where('customer_name', 'like', "%{$search}%")
+                                ->orWhere('site_name', 'like', "%{$search}%")
+                                ->orWhere('no_jaringan', 'like', "%{$search}%");
                         });
+                });
+            })
+
+            // TICKET TYPE
+            ->when($ticketType, fn($query, $ticketType) => $query->where('ticket_type', $ticketType))
+            // STATUS
+            ->when($status, function ($query, $status) {
+                $query->where('status', $status);
+            })
+
+            // PRIORITY
+            ->when($priority, function ($query, $priority) {
+                $query->where('priority', $priority);
+            })
+
+            // DATE REPORTED
+            ->when($date, function ($query, $date) {
+                $query->whereDate('reported_at', $date);
+            })
+            // KENDALA
+            ->when($kendala, function ($query, $kendala) {
+                $query->whereHas('latestIncident', function ($query) use ($kendala) {
+                    $query->where('kendala_id', $kendala);
                 });
             })
             ->latest()
@@ -63,37 +80,42 @@ class TicketController extends Controller
             ->withQueryString();
 
         $ticketStats = [
-            'total' => Ticket::count(),
+            'active' => Ticket::whereIn('status', [
+                'open',
+                'on_progress',
+            ])->count(),
 
-            'open' => Ticket::where(
-                'status',
-                'open'
-            )->count(),
+            'resolved_today' => Ticket::where('status', 'resolved')
+                ->whereDate('resolved_at', today())
+                ->count(),
 
-            'on_progress' => Ticket::where(
-                'status',
-                'on_progress'
-            )->count(),
+            'closed_today' => Ticket::where('status', 'closed')
+                ->whereDate('closed_at', today())
+                ->count(),
 
-            'resolved' => Ticket::where(
-                'status',
-                'resolved'
-            )->count(),
-
-            'closed' => Ticket::where(
-                'status',
-                'closed'
-            )->count(),
+            'critical_active' => Ticket::where('priority', 'critical')
+                ->whereIn('status', [
+                    'open',
+                    'on_progress',
+                ])
+                ->count(),
         ];
-
+        $kendalas = TicketCategory::query()
+            ->orderBy('name')
+            ->get(['id', 'name']);
         return Inertia::render('Tickets/Index', [
             'tickets' => $tickets,
 
             'ticketStats' => $ticketStats,
+            'kendalas' => $kendalas,
 
             'filters' => [
-                'status' => $status,
                 'search' => $search,
+                'ticket_type' => $ticketType,
+                'status' => $status,
+                'priority' => $priority,
+                'date' => $date,
+                'kendala' => $kendala,
             ],
         ]);
     }

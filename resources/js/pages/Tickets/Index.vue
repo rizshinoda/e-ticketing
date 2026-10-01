@@ -1,8 +1,20 @@
 <script setup lang="ts">
 import { Link, router } from '@inertiajs/vue3';
 import { ref } from 'vue';
-import { Eye, Pencil, Trash2 } from 'lucide-vue-next';
+import {
+    Eye,
+    Pencil,
+    Trash2,
+    Activity,
+    CheckCircle2,
+    Lock,
+    AlertTriangle,
+    TicketPlus,
+    Search,
+    RotateCcw,
+} from 'lucide-vue-next';
 import Swal from 'sweetalert2';
+
 interface Customer {
     id: number;
     customer_name: string | null;
@@ -25,8 +37,19 @@ interface Ticket {
     created_at: string;
     creator: User | null;
     customers: Customer[];
+    incidents_count?: number;
+    latest_incident: LatestIncident | null;
 }
-
+interface Kendala {
+    id: number;
+    name: string;
+}
+interface LatestIncident {
+    id: number;
+    incident_number: number;
+    kendala_id: number;
+    category: Kendala | null;
+}
 interface PaginationLink {
     url: string | null;
     label: string;
@@ -34,8 +57,8 @@ interface PaginationLink {
 }
 
 interface PaginatedTickets {
-    from: any;
-    to: any;
+    from: number | null;
+    to: number | null;
     data: Ticket[];
     current_page: number;
     last_page: number;
@@ -44,28 +67,52 @@ interface PaginatedTickets {
     links: PaginationLink[];
 }
 
+interface TicketStats {
+    active: number;
+    resolved_today: number;
+    closed_today: number;
+    critical_active: number;
+}
+
 const props = defineProps<{
     tickets: PaginatedTickets;
-    ticketStats: {
-        total: number;
-        open: number;
-        on_progress: number;
-        resolved: number;
-        closed: number;
-    };
+    ticketStats: TicketStats;
+    kendalas: Kendala[];
     filters: {
-        status?: string | null;
         search?: string | null;
+        ticket_type?: string | null;
+        kendala?: string | null;
+        status?: string | null;
+        priority?: string | null;
+        date?: string | null;
     };
 }>();
 
+/*
+|--------------------------------------------------------------------------
+| FILTER
+|--------------------------------------------------------------------------
+*/
+
 const search = ref(props.filters.search ?? '');
-const filterStatus = (status: string | null) => {
+const ticketType = ref(props.filters.ticket_type ?? '');
+const kendala = ref(props.filters.kendala ?? '');
+const status = ref(props.filters.status ?? '');
+const priority = ref(props.filters.priority ?? '');
+const date = ref(props.filters.date ?? '');
+
+const doSearch = () => {
+    const keyword = search.value.trim();
+
     router.get(
         '/tickets',
         {
-            ...(status ? { status } : {}),
-            ...(search.value ? { search: search.value } : {}),
+            ...(keyword ? { search: keyword } : {}),
+            ...(ticketType.value ? { ticket_type: ticketType.value } : {}),
+            ...(kendala.value ? { kendala: kendala.value } : {}),
+            ...(status.value ? { status: status.value } : {}),
+            ...(priority.value ? { priority: priority.value } : {}),
+            ...(date.value ? { date: date.value } : {}),
         },
         {
             preserveState: true,
@@ -73,7 +120,32 @@ const filterStatus = (status: string | null) => {
         },
     );
 };
-const deleteTicket = (ticket: any) => {
+
+const resetFilters = () => {
+    search.value = '';
+    ticketType.value = '';
+    kendala.value = '';
+    status.value = '';
+    priority.value = '';
+    date.value = '';
+
+    router.get(
+        '/tickets',
+        {},
+        {
+            preserveState: true,
+            preserveScroll: true,
+        },
+    );
+};
+
+/*
+|--------------------------------------------------------------------------
+| DELETE TICKET
+|--------------------------------------------------------------------------
+*/
+
+const deleteTicket = (ticket: Ticket) => {
     // Hanya Open yang boleh dihapus
     if (ticket.status !== 'open') {
         Swal.fire({
@@ -87,7 +159,7 @@ const deleteTicket = (ticket: any) => {
     }
 
     // Ticket yang pernah di-reopen tidak boleh dihapus
-    if (ticket.incidents_count > 1) {
+    if ((ticket.incidents_count ?? 1) > 1) {
         Swal.fire({
             icon: 'error',
             title: 'Tidak Bisa Dihapus',
@@ -98,7 +170,6 @@ const deleteTicket = (ticket: any) => {
         return;
     }
 
-    // Kalau boleh hapus, tampilkan konfirmasi
     Swal.fire({
         title: 'Hapus Ticket?',
         text: 'Ticket yang dihapus tidak dapat dikembalikan.',
@@ -127,7 +198,13 @@ const deleteTicket = (ticket: any) => {
     });
 };
 
-const editTicket = (ticket: any) => {
+/*
+|--------------------------------------------------------------------------
+| EDIT TICKET
+|--------------------------------------------------------------------------
+*/
+
+const editTicket = (ticket: Ticket) => {
     // Ticket yang sudah selesai tidak boleh diedit
     if (ticket.status === 'resolved' || ticket.status === 'closed') {
         Swal.fire({
@@ -140,8 +217,8 @@ const editTicket = (ticket: any) => {
         return;
     }
 
-    // Ticket yang pernah di-reopen memiliki lebih dari 1 incident
-    if (ticket.incidents_count > 1) {
+    // Ticket yang pernah di-reopen tidak boleh diedit
+    if ((ticket.incidents_count ?? 1) > 1) {
         Swal.fire({
             icon: 'error',
             title: 'Tidak Bisa Edit',
@@ -152,24 +229,15 @@ const editTicket = (ticket: any) => {
         return;
     }
 
-    // Kalau boleh edit
     router.visit(`/tickets/${ticket.id}/edit`);
 };
-const doSearch = () => {
-    const keyword = search.value.trim();
 
-    router.get(
-        '/tickets',
-        {
-            ...(keyword ? { search: keyword } : {}),
-            ...(props.filters.status ? { status: props.filters.status } : {}),
-        },
-        {
-            preserveState: true,
-            preserveScroll: true,
-        },
-    );
-};
+/*
+|--------------------------------------------------------------------------
+| LABEL
+|--------------------------------------------------------------------------
+*/
+
 const priorityLabel = (priority: Ticket['priority']) => {
     const labels = {
         low: 'Low',
@@ -191,6 +259,12 @@ const statusLabel = (status: Ticket['status']) => {
 
     return labels[status];
 };
+
+/*
+|--------------------------------------------------------------------------
+| BADGE CLASS
+|--------------------------------------------------------------------------
+*/
 
 const priorityClass = (priority: Ticket['priority']) => {
     switch (priority) {
@@ -227,6 +301,12 @@ const statusClass = (status: Ticket['status']) => {
     }
 };
 
+/*
+|--------------------------------------------------------------------------
+| DATE
+|--------------------------------------------------------------------------
+*/
+
 const formatDate = (date: string) => {
     return new Date(date).toLocaleString('id-ID', {
         dateStyle: 'medium',
@@ -234,10 +314,9 @@ const formatDate = (date: string) => {
     });
 };
 </script>
-
 <template>
     <div class="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-8">
-        <div class="mx-auto max-w-7xl">
+        <div class="w-full">
             <!-- =====================================================
                  HEADER
             ====================================================== -->
@@ -263,169 +342,229 @@ const formatDate = (date: string) => {
 
                 <Link
                     href="/tickets/create"
-                    class="inline-flex shrink-0 items-center justify-center rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90"
+                    class="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90"
                 >
-                    + Buat Ticket
+                    <TicketPlus class="h-4 w-4" />
+                    Buat Ticket
                 </Link>
             </div>
 
             <!-- =====================================================
      TICKET SUMMARY
 ====================================================== -->
-
-            <div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-                <!-- TOTAL -->
-                <!-- TOTAL -->
-                <button
-                    type="button"
-                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
-                    :class="{
-                        'ring-2 ring-primary': !props.filters.status,
-                    }"
-                    @click="filterStatus(null)"
+            <div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <!-- TICKET BERJALAN -->
+                <div
+                    class="group rounded-xl border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
                 >
-                    <div class="flex flex-col items-center justify-center">
-                        <p class="text-sm text-muted-foreground">
-                            Total Ticket
-                        </p>
+                    <div class="flex items-center gap-4">
+                        <div
+                            class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500"
+                        >
+                            <Activity class="h-6 w-6" />
+                        </div>
 
-                        <p class="mt-2 text-2xl font-bold">
-                            {{ props.ticketStats.total }}
-                        </p>
-                    </div>
-                </button>
+                        <div class="min-w-0">
+                            <p
+                                class="text-sm font-medium text-muted-foreground"
+                            >
+                                Ticket Berjalan
+                            </p>
 
-                <!-- OPEN -->
-                <button
-                    type="button"
-                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
-                    :class="{
-                        'ring-2 ring-blue-500': props.filters.status === 'open',
-                    }"
-                    @click="filterStatus('open')"
-                >
-                    <div class="flex flex-col items-center justify-between">
-                        <div>
-                            <p class="text-sm text-muted-foreground">Open</p>
-
-                            <p class="mt-2 text-2xl font-bold">
-                                {{ props.ticketStats.open }}
+                            <p class="mt-1 text-2xl font-bold tracking-tight">
+                                {{ props.ticketStats.active }}
                             </p>
                         </div>
                     </div>
-                </button>
+                </div>
 
-                <!-- ON PROGRESS -->
-                <button
-                    type="button"
-                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
-                    :class="{
-                        'ring-2 ring-yellow-500':
-                            props.filters.status === 'on_progress',
-                    }"
-                    @click="filterStatus('on_progress')"
+                <!-- RESOLVED HARI INI -->
+                <div
+                    class="group rounded-xl border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
                 >
-                    <div class="flex flex-col items-center justify-between">
-                        <div>
-                            <p class="text-sm text-muted-foreground">
-                                On Progress
+                    <div class="flex items-center gap-4">
+                        <div
+                            class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500"
+                        >
+                            <CheckCircle2 class="h-6 w-6" />
+                        </div>
+
+                        <div class="min-w-0">
+                            <p
+                                class="text-sm font-medium text-muted-foreground"
+                            >
+                                Resolved Hari Ini
                             </p>
 
-                            <p class="mt-2 text-2xl font-bold">
-                                {{ props.ticketStats.on_progress }}
+                            <p class="mt-1 text-2xl font-bold tracking-tight">
+                                {{ props.ticketStats.resolved_today }}
                             </p>
                         </div>
                     </div>
-                </button>
+                </div>
 
-                <!-- RESOLVED -->
-                <button
-                    type="button"
-                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
-                    :class="{
-                        'ring-2 ring-green-500':
-                            props.filters.status === 'resolved',
-                    }"
-                    @click="filterStatus('resolved')"
+                <!-- CLOSED HARI INI -->
+                <div
+                    class="group rounded-xl border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
                 >
-                    <div class="flex flex-col items-center justify-between">
-                        <div>
-                            <p class="text-sm text-muted-foreground">
-                                Resolved
+                    <div class="flex items-center gap-4">
+                        <div
+                            class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-slate-500/10 text-slate-400"
+                        >
+                            <Lock class="h-6 w-6" />
+                        </div>
+
+                        <div class="min-w-0">
+                            <p
+                                class="text-sm font-medium text-muted-foreground"
+                            >
+                                Closed Hari Ini
                             </p>
 
-                            <p class="mt-2 text-2xl font-bold">
-                                {{ props.ticketStats.resolved }}
+                            <p class="mt-1 text-2xl font-bold tracking-tight">
+                                {{ props.ticketStats.closed_today }}
                             </p>
                         </div>
                     </div>
-                </button>
+                </div>
 
-                <!-- CLOSED -->
-                <button
-                    type="button"
-                    class="w-full rounded-xl border bg-card p-5 text-center shadow-sm transition hover:bg-muted/30"
-                    :class="{
-                        'ring-2 ring-muted-foreground':
-                            props.filters.status === 'closed',
-                    }"
-                    @click="filterStatus('closed')"
+                <!-- CRITICAL AKTIF -->
+                <div
+                    class="group rounded-xl border bg-card p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
                 >
-                    <div class="flex flex-col items-center justify-between">
-                        <div>
-                            <p class="text-sm text-muted-foreground">Closed</p>
+                    <div class="flex items-center gap-4">
+                        <div
+                            class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-red-500/10 text-red-500"
+                        >
+                            <AlertTriangle class="h-6 w-6" />
+                        </div>
 
-                            <p class="mt-2 text-2xl font-bold">
-                                {{ props.ticketStats.closed }}
+                        <div class="min-w-0">
+                            <p
+                                class="text-sm font-medium text-muted-foreground"
+                            >
+                                Critical Aktif
+                            </p>
+
+                            <p class="mt-1 text-2xl font-bold tracking-tight">
+                                {{ props.ticketStats.critical_active }}
                             </p>
                         </div>
                     </div>
-                </button>
+                </div>
             </div>
-
             <!-- =====================================================
                  TABLE CARD
             ====================================================== -->
 
             <div class="overflow-hidden rounded-xl border bg-card shadow-sm">
-                <!-- Table Header -->
-                <div
-                    class="mb-2 flex flex-col gap-2 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
-                >
-                    <div>
-                        <h2 class="font-semibold">Daftar Ticket</h2>
+                <!-- =====================================================
+     FILTER
+====================================================== -->
+                <div class="border-b px-5 py-5">
+                    <div class="flex flex-col gap-4">
+                        <!-- FILTER INPUTS -->
+                        <div
+                            class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_160px_160px_160px_160px_160px]"
+                        >
+                            <!-- SEARCH -->
+                            <div class="relative">
+                                <Search
+                                    class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                                />
 
-                        <p class="mt-1 text-xs text-muted-foreground">
-                            Ticket gangguan yang tercatat pada sistem.
-                        </p>
-                    </div>
+                                <input
+                                    v-model="search"
+                                    type="text"
+                                    placeholder="Search ticket ID, customer, site..."
+                                    class="h-10 w-full rounded-lg border border-input bg-background pr-3 pl-9 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                />
+                            </div>
 
-                    <div class="text-xs text-muted-foreground">
-                        {{ props.tickets.total }} ticket
+                            <!-- TICKET TYPE -->
+                            <select
+                                v-model="ticketType"
+                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            >
+                                <option value="">Ticket Type</option>
+                                <option value="individual">Individual</option>
+                                <option value="gamas">GAMAS</option>
+                            </select>
+
+                            <!-- KENDALA -->
+                            <select
+                                v-model="kendala"
+                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            >
+                                <option value="">Kendala</option>
+
+                                <option
+                                    v-for="item in props.kendalas"
+                                    :key="item.id"
+                                    :value="item.id"
+                                >
+                                    {{ item.name }}
+                                </option>
+                            </select>
+
+                            <!-- STATUS -->
+                            <select
+                                v-model="status"
+                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            >
+                                <option value="">Status</option>
+                                <option value="open">Open</option>
+                                <option value="on_progress">On Progress</option>
+                                <option value="resolved">Resolved</option>
+                                <option value="closed">Closed</option>
+                            </select>
+
+                            <!-- PRIORITY -->
+                            <select
+                                v-model="priority"
+                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            >
+                                <option value="">Priority</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                                <option value="critical">Critical</option>
+                            </select>
+
+                            <!-- DATE -->
+                            <input
+                                v-model="date"
+                                type="date"
+                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                            />
+                        </div>
+
+                        <!-- FILTER ACTION -->
+                        <div
+                            class="flex flex-col gap-2 sm:flex-row sm:justify-end"
+                        >
+                            <!-- RESET -->
+                            <button
+                                type="button"
+                                class="inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition hover:bg-muted"
+                                @click="resetFilters"
+                            >
+                                <RotateCcw class="h-4 w-4" />
+                                Reset
+                            </button>
+
+                            <!-- CARI -->
+                            <button
+                                type="button"
+                                class="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90"
+                                @click="doSearch"
+                            >
+                                <Search class="h-4 w-4" />
+                                Cari
+                            </button>
+                        </div>
                     </div>
                 </div>
-                <!-- SEARCH -->
-                <form
-                    class="mb-2 flex flex-col gap-3 sm:flex-row"
-                    @submit.prevent="doSearch"
-                >
-                    <div class="relative flex-1">
-                        <input
-                            v-model="search"
-                            type="text"
-                            placeholder="Cari no ticket, pelanggan, site, atau no jaringan..."
-                            class="w-full rounded-lg border bg-background px-4 py-2.5 text-sm transition outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary"
-                        />
-                    </div>
-
-                    <button
-                        type="submit"
-                        class="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition hover:opacity-90"
-                    >
-                        Cari
-                    </button>
-                </form>
-
                 <!-- TOTAL -->
                 <!-- =================================================
                      TABLE
@@ -459,7 +598,11 @@ const formatDate = (date: string) => {
                                 >
                                     Jenis
                                 </th>
-
+                                <th
+                                    class="px-5 py-3 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                                >
+                                    Kendala
+                                </th>
                                 <th
                                     class="px-5 py-3 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
                                 >
@@ -533,22 +676,42 @@ const formatDate = (date: string) => {
                                      CUSTOMER / SITE
                                 ================================== -->
 
-                                <td class="px-5 py-4 align-top">
+                                <!-- =================================
+     CUSTOMER / SITE
+================================== -->
+                                <td
+                                    class="w-[280px] max-w-[280px] px-5 py-4 align-top"
+                                >
                                     <div v-if="ticket.customers.length">
-                                        <div class="font-medium">
+                                        <!-- Customer -->
+                                        <div
+                                            class="truncate font-medium"
+                                            :title="
+                                                ticket.customers[0]
+                                                    .customer_name || '-'
+                                            "
+                                        >
                                             {{
                                                 ticket.customers[0]
                                                     .customer_name || '-'
                                             }}
                                         </div>
 
-                                        <div class="mt-1 text-sm">
+                                        <!-- Site -->
+                                        <div
+                                            class="mt-1 line-clamp-2 text-sm text-foreground/90"
+                                            :title="
+                                                ticket.customers[0].site_name ||
+                                                '-'
+                                            "
+                                        >
                                             {{
                                                 ticket.customers[0].site_name ||
                                                 '-'
                                             }}
                                         </div>
 
+                                        <!-- No Jaringan -->
                                         <div
                                             class="mt-1 text-xs text-muted-foreground"
                                         >
@@ -575,7 +738,7 @@ const formatDate = (date: string) => {
                                         v-else
                                         class="text-sm text-muted-foreground"
                                     >
-                                        -
+                                        —
                                     </span>
                                 </td>
 
@@ -594,7 +757,23 @@ const formatDate = (date: string) => {
                                         }}
                                     </span>
                                 </td>
+                                <td class="px-5 py-4 align-top">
+                                    <span
+                                        v-if="ticket.latest_incident?.category"
+                                        class="inline-flex items-center rounded-md border border-border/70 bg-muted/40 px-2.5 py-1 text-xs font-medium text-foreground"
+                                    >
+                                        {{
+                                            ticket.latest_incident.category.name
+                                        }}
+                                    </span>
 
+                                    <span
+                                        v-else
+                                        class="text-xs text-muted-foreground"
+                                    >
+                                        —
+                                    </span>
+                                </td>
                                 <!-- =================================
                                      PRIORITY
                                 ================================== -->
@@ -639,37 +818,46 @@ const formatDate = (date: string) => {
                                      ACTION
                                 ================================== -->
 
-                                <td class="px-5 py-4 text-right align-top">
+                                <!-- =================================
+     ACTION
+================================== -->
+                                <td class="px-5 py-4 align-top">
                                     <div
-                                        class="flex items-center justify-end gap-2"
+                                        class="flex items-center justify-end gap-1.5"
                                     >
                                         <!-- Detail -->
                                         <Link
                                             :href="`/tickets/${ticket.id}`"
-                                            class="inline-flex items-center justify-center rounded-lg border bg-background p-2.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                                             title="Lihat Detail"
+                                            class="group inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground transition-all duration-200 hover:border-blue-500/40 hover:bg-blue-500/10 hover:text-blue-500 hover:shadow-sm"
                                         >
-                                            <Eye class="h-4 w-4" />
+                                            <Eye
+                                                class="h-4 w-4 transition-transform duration-200 group-hover:scale-110"
+                                            />
                                         </Link>
 
                                         <!-- Edit -->
                                         <button
                                             type="button"
-                                            class="inline-flex items-center justify-center rounded-lg border bg-background p-2.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                                             title="Edit Ticket"
                                             @click="editTicket(ticket)"
+                                            class="group inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground transition-all duration-200 hover:border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-500 hover:shadow-sm"
                                         >
-                                            <Pencil class="h-4 w-4" />
+                                            <Pencil
+                                                class="h-4 w-4 transition-transform duration-200 group-hover:scale-110"
+                                            />
                                         </button>
 
                                         <!-- Hapus -->
                                         <button
                                             type="button"
-                                            class="inline-flex items-center justify-center rounded-lg border bg-background p-2.5 text-muted-foreground transition hover:bg-muted hover:text-destructive"
                                             title="Hapus Ticket"
                                             @click="deleteTicket(ticket)"
+                                            class="group inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground transition-all duration-200 hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-500 hover:shadow-sm"
                                         >
-                                            <Trash2 class="h-4 w-4" />
+                                            <Trash2
+                                                class="h-4 w-4 transition-transform duration-200 group-hover:scale-110"
+                                            />
                                         </button>
                                     </div>
                                 </td>
