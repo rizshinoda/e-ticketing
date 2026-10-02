@@ -43,6 +43,10 @@ class DashboardController extends Controller
 
             'low' => Ticket::where('priority', 'low')->count(),
         ];
+        $criticalActive = Ticket::query()
+            ->where('priority', 'critical')
+            ->whereIn('status', ['open', 'on_progress'])
+            ->count();
         $statusChart = [
             [
                 'status' => 'Open',
@@ -88,7 +92,7 @@ class DashboardController extends Controller
             'priorityStats' => $priorityStats,
             'statusChart' => $statusChart,
             'monthlyTicketChart' => $monthlyTicketChart,
-
+            'criticalActive' => $criticalActive,
         ]);
     }
 }
