@@ -34,18 +34,37 @@ class DashboardController extends Controller
                 'closed'
             )->count(),
         ];
+        $ticketsForPriority = Ticket::query()
+            ->get([
+                'id',
+                'priority',
+                'status',
+                'reported_at',
+            ]);
+
         $priorityStats = [
-            'critical' => Ticket::where('priority', 'critical')->count(),
-
-            'high' => Ticket::where('priority', 'high')->count(),
-
-            'medium' => Ticket::where('priority', 'medium')->count(),
-
-            'low' => Ticket::where('priority', 'low')->count(),
+            'critical' => 0,
+            'high' => 0,
+            'medium' => 0,
+            'low' => 0,
         ];
-        $criticalActive = Ticket::query()
-            ->where('priority', 'critical')
+
+        foreach ($ticketsForPriority as $ticket) {
+            $currentPriority = $ticket->calculateCurrentPriority();
+
+            $priorityStats[$currentPriority]++;
+        }
+        $activeTickets = Ticket::query()
             ->whereIn('status', ['open', 'on_progress'])
+            ->get([
+                'id',
+                'priority',
+                'status',
+                'reported_at',
+            ]);
+
+        $criticalActive = $activeTickets
+            ->filter(fn($ticket) => $ticket->calculateCurrentPriority() === 'critical')
             ->count();
         $statusChart = [
             [
@@ -92,6 +111,38 @@ class DashboardController extends Controller
             'priorityStats' => $priorityStats,
             'statusChart' => $statusChart,
             'monthlyTicketChart' => $monthlyTicketChart,
+            'criticalActive' => $criticalActive,
+        ]);
+    }
+
+    public function monitor()
+    {
+        $tickets = Ticket::query()
+            ->whereIn('status', ['open', 'on_progress', 'resolved'])
+            ->get([
+                'id',
+                'priority',
+                'status',
+                'reported_at',
+            ]);
+
+        $priorityStats = [
+            'critical' => 0,
+            'high' => 0,
+            'medium' => 0,
+            'low' => 0,
+        ];
+
+        foreach ($tickets as $ticket) {
+            $currentPriority = $ticket->calculateCurrentPriority();
+
+            $priorityStats[$currentPriority]++;
+        }
+
+        $criticalActive = $priorityStats['critical'];
+
+        return response()->json([
+            'priorityStats' => $priorityStats,
             'criticalActive' => $criticalActive,
         ]);
     }

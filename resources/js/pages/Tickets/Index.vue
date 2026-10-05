@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Link, router } from '@inertiajs/vue3';
-import { ref } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import {
     Eye,
     Pencil,
@@ -32,6 +32,7 @@ interface Ticket {
     ticket_number: string;
     ticket_type: 'individual' | 'gamas';
     priority: 'low' | 'medium' | 'high' | 'critical';
+    current_priority: 'low' | 'medium' | 'high' | 'critical';
     status: 'open' | 'on_progress' | 'resolved' | 'closed';
     description: string | null;
     created_at: string;
@@ -39,6 +40,7 @@ interface Ticket {
     customers: Customer[];
     incidents_count?: number;
     latest_incident: LatestIncident | null;
+    ticket_age: string;
 }
 interface Kendala {
     id: number;
@@ -66,7 +68,12 @@ interface PaginatedTickets {
     total: number;
     links: PaginationLink[];
 }
-
+interface TicketMonitor {
+    id: number;
+    ticket_number: string;
+    current_priority: 'low' | 'medium' | 'high' | 'critical';
+    ticket_age: string;
+}
 interface TicketStats {
     active: number;
     resolved_today: number;
@@ -87,7 +94,45 @@ const props = defineProps<{
         date?: string | null;
     };
 }>();
+const fetchMonitor = async () => {
+    try {
+        const response = await fetch('/tickets/monitor');
 
+        if (!response.ok) {
+            throw new Error('Gagal mengambil data monitor');
+        }
+
+        const data: TicketMonitor[] = await response.json();
+
+        data.forEach((monitor) => {
+            const ticket = props.tickets.data.find(
+                (ticket) => ticket.id === monitor.id,
+            );
+
+            if (ticket) {
+                ticket.current_priority = monitor.current_priority;
+                ticket.ticket_age = monitor.ticket_age;
+            }
+        });
+    } catch (error) {
+        console.error('Gagal mengambil monitoring tiket:', error);
+    }
+};
+
+fetchMonitor();
+let monitorInterval: ReturnType<typeof setInterval>;
+
+onMounted(() => {
+    fetchMonitor();
+
+    monitorInterval = setInterval(() => {
+        fetchMonitor();
+    }, 60_000);
+});
+
+onUnmounted(() => {
+    clearInterval(monitorInterval);
+});
 /*
 |--------------------------------------------------------------------------
 | FILTER
@@ -478,6 +523,7 @@ const formatDate = (date: string) => {
                                     type="text"
                                     placeholder="Search ticket ID, customer, site..."
                                     class="h-10 w-full rounded-lg border border-input bg-background pr-3 pl-9 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                    @keyup.enter="doSearch"
                                 />
                             </div>
 
@@ -531,10 +577,9 @@ const formatDate = (date: string) => {
                                 <option value="critical">Critical</option>
                             </select>
 
-                            <!-- DATE -->
                             <input
                                 v-model="date"
-                                type="date"
+                                type="month"
                                 class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                             />
                         </div>
@@ -614,7 +659,11 @@ const formatDate = (date: string) => {
                                 >
                                     Status
                                 </th>
-
+                                <th
+                                    class="px-5 py-3 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                                >
+                                    Umur Ticket
+                                </th>
                                 <th
                                     class="px-5 py-3 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
                                 >
@@ -782,10 +831,16 @@ const formatDate = (date: string) => {
                                     <span
                                         :class="[
                                             'inline-flex rounded-full px-2.5 py-1 text-xs font-medium',
-                                            priorityClass(ticket.priority),
+                                            priorityClass(
+                                                ticket.current_priority,
+                                            ),
                                         ]"
                                     >
-                                        {{ priorityLabel(ticket.priority) }}
+                                        {{
+                                            priorityLabel(
+                                                ticket.current_priority,
+                                            )
+                                        }}
                                     </span>
                                 </td>
 
@@ -803,7 +858,12 @@ const formatDate = (date: string) => {
                                         {{ statusLabel(ticket.status) }}
                                     </span>
                                 </td>
-
+                                <!-- Umur -->
+                                <td class="px-5 py-4 align-top">
+                                    <span class="text-sm text-muted-foreground">
+                                        {{ ticket.ticket_age }}
+                                    </span>
+                                </td>
                                 <!-- =================================
                                      CREATED
                                 ================================== -->

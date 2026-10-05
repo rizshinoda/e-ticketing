@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Head, Link } from '@inertiajs/vue3';
-import { computed, ref } from 'vue';
+import { computed, ref, onMounted, onUnmounted } from 'vue';
 
 import { dashboard } from '@/routes';
 
@@ -78,7 +78,40 @@ const props = defineProps<{
     statusChart: StatusChartItem[];
     monthlyTicketChart: MonthlyTicketChartItem[];
 }>();
+const livePriorityStats = ref<PriorityStats>({
+    ...props.priorityStats,
+});
 
+const liveCriticalActive = ref(props.criticalActive);
+const fetchMonitor = async () => {
+    try {
+        const response = await fetch('/dashboard/monitor');
+
+        if (!response.ok) {
+            throw new Error('Gagal mengambil data monitor dashboard');
+        }
+
+        const data = await response.json();
+
+        livePriorityStats.value = data.priorityStats;
+        liveCriticalActive.value = data.criticalActive;
+    } catch (error) {
+        console.error('Gagal mengambil monitoring dashboard:', error);
+    }
+};
+let monitorInterval: ReturnType<typeof setInterval>;
+
+onMounted(() => {
+    fetchMonitor();
+
+    monitorInterval = setInterval(() => {
+        fetchMonitor();
+    }, 60_000);
+});
+
+onUnmounted(() => {
+    clearInterval(monitorInterval);
+});
 /* ---------- Konfigurasi status ---------- */
 const statusMeta: Record<
     StatusKey,
@@ -170,25 +203,25 @@ const priorities = computed(() => [
         key: 'critical',
         label: 'Critical',
         color: '#ef4444',
-        total: props.priorityStats.critical,
+        total: livePriorityStats.value.critical,
     },
     {
         key: 'high',
         label: 'High',
         color: '#f97316',
-        total: props.priorityStats.high,
+        total: livePriorityStats.value.high,
     },
     {
         key: 'medium',
         label: 'Medium',
         color: '#eab308',
-        total: props.priorityStats.medium,
+        total: livePriorityStats.value.medium,
     },
     {
         key: 'low',
         label: 'Low',
         color: '#94a3b8',
-        total: props.priorityStats.low,
+        total: livePriorityStats.value.low,
     },
 ]);
 type PriorityDatum = (typeof priorities.value)[number];
@@ -277,7 +310,7 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
 
         <!-- Peringatan ticket critical -->
         <div
-            v-if="props.criticalActive > 0"
+            v-if="liveCriticalActive > 0"
             class="flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/5 p-4"
         >
             <div
@@ -287,7 +320,7 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
             </div>
             <p class="text-sm">
                 Ada
-                <strong>{{ props.criticalActive }} ticket Critical</strong>
+                <strong>{{ liveCriticalActive }} ticket Critical Aktif</strong>
                 yang perlu segera ditangani.
             </p>
         </div>

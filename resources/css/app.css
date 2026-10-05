@@ -174,13 +174,13 @@
     }
 }
 
-/* Date input calendar icon */
-input[type='date']::-webkit-calendar-picker-indicator {
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='month']::-webkit-calendar-picker-indicator {
     filter: none;
 }
 
-/* Calendar icon saat dark mode */
-.dark input[type='date']::-webkit-calendar-picker-indicator {
+.dark input[type='date']::-webkit-calendar-picker-indicator,
+.dark input[type='month']::-webkit-calendar-picker-indicator {
     filter: invert(1);
 }
 

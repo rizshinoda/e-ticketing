@@ -8,6 +8,7 @@ use App\Models\Rfo;
 use App\Models\Ticket;
 use App\Models\TicketCategory;
 use App\Models\TicketIncident;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -67,7 +68,16 @@ class TicketController extends Controller
 
             // DATE REPORTED
             ->when($date, function ($query, $date) {
-                $query->whereDate('reported_at', $date);
+                $startOfMonth = Carbon::createFromFormat('Y-m', $date)
+                    ->startOfMonth();
+
+                $endOfMonth = Carbon::createFromFormat('Y-m', $date)
+                    ->endOfMonth();
+
+                $query->whereBetween('reported_at', [
+                    $startOfMonth,
+                    $endOfMonth,
+                ]);
             })
             // KENDALA
             ->when($kendala, function ($query, $kendala) {
@@ -92,12 +102,13 @@ class TicketController extends Controller
             'closed_today' => Ticket::where('status', 'closed')
                 ->whereDate('closed_at', today())
                 ->count(),
-
-            'critical_active' => Ticket::where('priority', 'critical')
-                ->whereIn('status', [
-                    'open',
-                    'on_progress',
-                ])
+            'critical_active' => Ticket::whereIn('status', [
+                'open',
+                'on_progress',
+                'resolved',
+            ])
+                ->get()
+                ->filter(fn($ticket) => $ticket->calculateCurrentPriority() === 'critical')
                 ->count(),
         ];
         $kendalas = TicketCategory::query()
@@ -2849,5 +2860,26 @@ class TicketController extends Controller
 
         return to_route('tickets.index')
             ->with('success', 'Ticket berhasil dihapus.');
+    }
+    public function monitor()
+    {
+        $tickets = Ticket::query()
+            ->whereIn('status', ['open', 'on_progress', 'resolved'])
+            ->get([
+                'id',
+                'ticket_number',
+                'reported_at',
+                'priority',
+                'status',
+            ]);
+
+        return response()->json(
+            $tickets->map(fn($ticket) => [
+                'id' => $ticket->id,
+                'ticket_number' => $ticket->ticket_number,
+                'current_priority' => $ticket->current_priority,
+                'ticket_age' => $ticket->ticket_age,
+            ])
+        );
     }
 }

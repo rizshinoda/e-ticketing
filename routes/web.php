@@ -11,6 +11,8 @@ Route::inertia('/', 'Welcome')->name('home');
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', [DashboardController::class, 'index'])
         ->name('dashboard');
+    Route::get('/dashboard/monitor', [DashboardController::class, 'monitor'])
+        ->name('dashboard.monitor');
     Route::prefix('tickets')
         ->name('tickets.')
         ->group(function () {
@@ -29,11 +31,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 TicketController::class,
                 'store',
             ])->name('store');
-
+            Route::get('/monitor', [
+                TicketController::class,
+                'monitor',
+            ])->name('monitor');
             Route::get('/{ticket}', [
                 TicketController::class,
                 'show',
             ])->name('show');
+
             Route::get('/{ticket}/edit', [TicketController::class, 'edit'])
                 ->name('edit');
 

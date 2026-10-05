@@ -35,7 +35,11 @@ class Ticket extends Model
         'resolved_at'       => 'datetime',
         'closed_at'         => 'datetime',
     ];
+    protected $appends = [
+        'current_priority',
+        'ticket_age',
 
+    ];
     /**
      * User yang membuat dan menangani ticket.
      */
@@ -116,5 +120,54 @@ class Ticket extends Model
     {
         return $this->hasOne(TicketIncident::class, 'ticket_id')
             ->latestOfMany('incident_number');
+    }
+    public function calculateCurrentPriority(): string
+    {
+        if ($this->status === 'closed') {
+            return $this->priority;
+        }
+
+        $elapsedMinutes = (int) $this->reported_at->diffInMinutes(now());
+
+        $escalationCount = (int) floor($elapsedMinutes / 240);
+
+        $levels = [
+            'low' => 0,
+            'medium' => 1,
+            'high' => 2,
+            'critical' => 3,
+        ];
+
+        $priorities = [
+            'low',
+            'medium',
+            'high',
+            'critical',
+        ];
+
+        $currentLevel = $levels[$this->priority];
+
+        $newLevel = min(
+            $currentLevel + $escalationCount,
+            3
+        );
+
+        return $priorities[$newLevel];
+    }
+    public function getCurrentPriorityAttribute(): string
+    {
+        return $this->calculateCurrentPriority();
+    }
+
+    public function getTicketAgeAttribute(): string
+    {
+        $endTime = $this->closed_at ?? now();
+
+        $minutes = (int) $this->reported_at->diffInMinutes($endTime);
+
+        $hours = intdiv($minutes, 60);
+        $remainingMinutes = $minutes % 60;
+
+        return "{$hours} jam {$remainingMinutes} menit";
     }
 }
