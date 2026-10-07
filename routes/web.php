@@ -1,5 +1,6 @@
 <?php
 
+use App\Events\TestReverbEvent;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\RestitutionController;
 use App\Http\Controllers\TicketCategoryController;
@@ -35,6 +36,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 TicketController::class,
                 'monitor',
             ])->name('monitor');
+            Route::get('/monitoring', [TicketController::class, 'monitoring'])
+                ->name('monitoring');
             Route::get('/{ticket}', [
                 TicketController::class,
                 'show',

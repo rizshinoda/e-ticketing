@@ -170,4 +170,48 @@ class Ticket extends Model
 
         return "{$hours} jam {$remainingMinutes} menit";
     }
+
+    public function calculateDowntimeSeconds(): int
+    {
+        $incident = $this->latestIncident()
+            ->with('category')
+            ->first();
+
+        if (!$incident) {
+            return 0;
+        }
+
+        // Jika kendala bukan kategori downtime,
+        // maka SLA timer tidak berjalan.
+        if (!$incident->category?->is_downtime) {
+            return 0;
+        }
+
+        $start = $incident->reported_at;
+        $end = $incident->resolved_at ?? now();
+
+        $totalSeconds = $start->diffInSeconds($end);
+
+        $stopClockSeconds = $this->stopClocks()
+            ->where(function ($query) use ($start, $end) {
+                $query->whereBetween('started_at', [$start, $end])
+                    ->orWhereBetween('ended_at', [$start, $end])
+                    ->orWhere(function ($query) use ($start, $end) {
+                        $query->where('started_at', '<=', $start)
+                            ->where(function ($query) use ($end) {
+                                $query->whereNull('ended_at')
+                                    ->orWhere('ended_at', '>=', $end);
+                            });
+                    });
+            })
+            ->get()
+            ->sum(function ($stopClock) use ($end) {
+                $stopStart = $stopClock->started_at;
+                $stopEnd = $stopClock->ended_at ?? $end;
+
+                return $stopStart->diffInSeconds($stopEnd);
+            });
+
+        return max(0, $totalSeconds - $stopClockSeconds);
+    }
 }

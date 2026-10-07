@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\TicketCreated;
 use App\Models\OnlineBilling;
 use App\Models\Pelanggan;
 use App\Models\Rfo;
@@ -823,6 +824,9 @@ class TicketController extends Controller
 
             return $ticket;
         });
+
+
+        event(new TicketCreated($ticket));
 
         /*
     |--------------------------------------------------------------------------
@@ -2881,5 +2885,38 @@ class TicketController extends Controller
                 'ticket_age' => $ticket->ticket_age,
             ])
         );
+    }
+
+    public function monitoring(): Response
+    {
+        $tickets = Ticket::query()
+            ->with([
+                'customers',
+                'latestIncident.category',
+                'stopClocks',
+            ])
+            ->whereIn('status', [
+                'open',
+                'on_progress',
+                'resolved',
+            ])
+            ->latest('reported_at')
+            ->get();
+
+        $tickets->each(function ($ticket) {
+            $hasActiveStopClock = $ticket->stopClocks
+                ->contains(fn($stopClock) => $stopClock->ended_at === null);
+
+            $ticket->sla_timer_seconds = $ticket->calculateDowntimeSeconds();
+
+            $ticket->sla_timer_running =
+                $ticket->status !== 'resolved'
+                && $ticket->latestIncident?->category?->is_downtime
+                && ! $hasActiveStopClock;
+        });
+
+        return Inertia::render('Tickets/Monitoring', [
+            'tickets' => $tickets,
+        ]);
     }
 }

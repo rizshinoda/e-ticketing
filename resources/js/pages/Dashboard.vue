@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Head, Link } from '@inertiajs/vue3';
 import { computed, ref, onMounted, onUnmounted } from 'vue';
-
+import { useEchoPublic } from '@laravel/echo-vue';
 import { dashboard } from '@/routes';
 
 import { Donut, GroupedBar } from '@unovis/ts';
@@ -83,6 +83,7 @@ const livePriorityStats = ref<PriorityStats>({
 });
 
 const liveCriticalActive = ref(props.criticalActive);
+
 const fetchMonitor = async () => {
     try {
         const response = await fetch('/dashboard/monitor');
@@ -112,6 +113,7 @@ onMounted(() => {
 onUnmounted(() => {
     clearInterval(monitorInterval);
 });
+
 /* ---------- Konfigurasi status ---------- */
 const statusMeta: Record<
     StatusKey,
