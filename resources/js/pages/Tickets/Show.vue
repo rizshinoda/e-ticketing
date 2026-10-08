@@ -135,8 +135,12 @@ const page = usePage<{
     flash: {
         success?: string;
     };
+    errors: {
+        stop_clock?: string;
+        resolve?: string;
+        close?: string;
+    };
 }>();
-
 const showAddSiteForm = ref(false);
 
 const addSiteForm = useForm({
@@ -754,7 +758,7 @@ const hasActiveStopClock = () => {
 const showSuccess = ref(false);
 const showResolveError = ref(false);
 const showCloseError = ref(false);
-
+const showStopClockError = ref(false);
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 const startToastTimer = () => {
@@ -766,6 +770,7 @@ const startToastTimer = () => {
         showSuccess.value = false;
         showResolveError.value = false;
         showCloseError.value = false;
+        showStopClockError.value = false;
     }, 3000);
 };
 
@@ -803,6 +808,18 @@ watch(
         }
 
         showCloseError.value = true;
+        startToastTimer();
+    },
+    { immediate: true },
+);
+watch(
+    () => page.props.errors.stop_clock,
+    (message) => {
+        if (!message) {
+            return;
+        }
+
+        showStopClockError.value = true;
         startToastTimer();
     },
     { immediate: true },
@@ -872,7 +889,22 @@ watch(
             ×
         </button>
     </div>
+    <div
+        v-if="showStopClockError && page.props.errors.stop_clock"
+        class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
+    >
+        <div class="flex-1">
+            {{ page.props.errors.stop_clock }}
+        </div>
 
+        <button
+            type="button"
+            class="text-lg leading-none text-red-500 hover:text-red-700"
+            @click="showStopClockError = false"
+        >
+            ×
+        </button>
+    </div>
     <div class="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-8">
         <div class="mx-auto max-w-7xl">
             <!-- =====================================================

@@ -2,7 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\TicketClosed;
 use App\Events\TicketCreated;
+use App\Events\TicketReopened;
+use App\Events\TicketResolved;
+use App\Events\TicketStopClockEnded;
+use App\Events\TicketStopClockStarted;
+use App\Events\TicketUpdated;
 use App\Models\OnlineBilling;
 use App\Models\Pelanggan;
 use App\Models\Rfo;
@@ -13,6 +19,7 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -825,6 +832,11 @@ class TicketController extends Controller
             return $ticket;
         });
 
+        $ticket->load([
+            'creator',
+            'latestUpdate.user',
+            'customers',
+        ]);
 
         event(new TicketCreated($ticket));
 
@@ -1121,7 +1133,10 @@ class TicketController extends Controller
                 }
             }
         });
-
+        $ticket->load([
+            'latestUpdate.user',
+        ]);
+        event(new TicketUpdated($ticket));
 
         return back()->with(
             'success',
@@ -1154,8 +1169,24 @@ class TicketController extends Controller
                 'Stop Clock hanya dapat digunakan ketika ticket sedang On Progress.',
             ]);
         }
+        // tidak boleh stop clock
+        $latestIncident = $ticket->incidents()
+            ->with('category')
+            ->latest('incident_number')
+            ->first();
 
+        if (!$latestIncident || !$latestIncident->category?->is_downtime) {
 
+            Log::info('STOP CLOCK DITOLAK - NON DOWNTIME', [
+                'ticket_id' => $ticket->id,
+                'is_downtime' => $latestIncident?->category?->is_downtime,
+            ]);
+
+            return back()->withErrors([
+                'stop_clock' =>
+                'Stop Clock hanya dapat digunakan untuk kendala downtime.',
+            ]);
+        }
 
         /*
     |--------------------------------------------------------------------------
@@ -1189,6 +1220,7 @@ class TicketController extends Controller
             'user_id' => Auth::id(),
             'message' => 'Stop Clock dimulai. Alasan: ' . $validated['reason'],
         ]);
+        event(new TicketStopClockStarted($ticket));
         return back()->with(
             'success',
             'Stop Clock berhasil dimulai.'
@@ -1231,6 +1263,7 @@ class TicketController extends Controller
             'user_id' => Auth::id(),
             'message' => 'Stop Clock dihentikan.',
         ]);
+        event(new TicketStopClockEnded($ticket));
         return back()->with(
             'success',
             'Stop Clock berhasil dihentikan.'
@@ -1347,6 +1380,7 @@ class TicketController extends Controller
                     'message' => 'Ticket berhasil di-Resolve.',
                 ]);
             });
+            event(new TicketResolved($ticket));
 
             return back()->with(
                 'success',
@@ -1455,6 +1489,13 @@ class TicketController extends Controller
             ]);
         });
 
+        $ticket->load([
+            'latestIncident.category',
+            'stopClocks',
+        ]);
+
+        event(new TicketResolved($ticket));
+
         return back()->with(
             'success',
             'Ticket berhasil di-resolve.'
@@ -1521,6 +1562,15 @@ class TicketController extends Controller
                 'message' => 'Ticket di-Re-Open. Alasan: ' . $validated['reason'],
             ]);
         });
+        $ticket->load([
+            'creator',
+            'customers',
+            'latestIncident.category',
+            'latestUpdate.user',
+            'stopClocks',
+        ]);
+
+        event(new TicketReopened($ticket));
 
         return back()->with(
             'success',
@@ -1641,6 +1691,7 @@ class TicketController extends Controller
             'message' => 'Ticket berhasil di-Close.',
         ]);
 
+        event(new TicketClosed($ticket));
         return back()->with(
             'success',
             'Ticket berhasil di-Close.'
@@ -2892,7 +2943,9 @@ class TicketController extends Controller
         $tickets = Ticket::query()
             ->with([
                 'customers',
+                'creator',
                 'latestIncident.category',
+                'latestUpdate.user',
                 'stopClocks',
             ])
             ->whereIn('status', [
@@ -2904,15 +2957,62 @@ class TicketController extends Controller
             ->get();
 
         $tickets->each(function ($ticket) {
+            /*
+         * Cek apakah ada Stop Clock yang masih aktif.
+         */
             $hasActiveStopClock = $ticket->stopClocks
-                ->contains(fn($stopClock) => $stopClock->ended_at === null);
+                ->contains(
+                    fn($stopClock) => $stopClock->ended_at === null
+                );
 
-            $ticket->sla_timer_seconds = $ticket->calculateDowntimeSeconds();
+            /*
+         * Hitung SLA Timer.
+         */
+            $ticket->sla_timer_seconds =
+                $ticket->calculateDowntimeSeconds();
 
+            /*
+         * Tentukan apakah SLA sedang berjalan.
+         */
             $ticket->sla_timer_running =
-                $ticket->status !== 'resolved'
-                && $ticket->latestIncident?->category?->is_downtime
+                $ticket->latestIncident?->category?->is_downtime
+                && $ticket->latestIncident?->resolved_at === null
+                && $ticket->status !== 'resolved'
                 && ! $hasActiveStopClock;
+            /*
+         * Tentukan status SLA.
+         *
+         * running
+         * stop_clock
+         * not_applicable
+         */
+            if (! $ticket->latestIncident?->category?->is_downtime) {
+                $ticket->sla_timer_status = 'not_applicable';
+            } elseif (
+                $ticket->status === 'resolved'
+                || $ticket->latestIncident?->resolved_at !== null
+            ) {
+                $ticket->sla_timer_status = 'resolved';
+            } elseif ($hasActiveStopClock) {
+                $ticket->sla_timer_status = 'stop_clock';
+            } else {
+                $ticket->sla_timer_status = 'running';
+            }
+            /*
+         * Durasi total ticket.
+         *
+         * Tidak terpengaruh Stop Clock.
+         *
+         * Open / On Progress / Resolved
+         *   → sampai sekarang
+         *
+         * Closed
+         *   → sampai closed_at
+         */
+            $ticket->ticket_duration_seconds =
+                $ticket->reported_at->diffInSeconds(
+                    $ticket->closed_at ?? now()
+                );
         });
 
         return Inertia::render('Tickets/Monitoring', [

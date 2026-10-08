@@ -5,11 +5,11 @@ namespace App\Events;
 use App\Models\Ticket;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 
-class TicketCreated implements ShouldBroadcastNow
+class TicketReopened implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
@@ -26,23 +26,15 @@ class TicketCreated implements ShouldBroadcastNow
 
     public function broadcastWith(): array
     {
-        /*
-         * Cek Stop Clock aktif.
-         */
         $hasActiveStopClock = $this->ticket->stopClocks
             ->contains(
                 fn($stopClock) => $stopClock->ended_at === null
             );
 
-        /*
-         * Cek apakah kendala merupakan downtime.
-         */
         $isDowntime =
-            $this->ticket->latestIncident?->category?->is_downtime ?? false;
+            $this->ticket->latestIncident?->category?->is_downtime
+            ?? false;
 
-        /*
-         * Tentukan status SLA.
-         */
         if (! $isDowntime) {
             $slaTimerStatus = 'not_applicable';
         } elseif ($hasActiveStopClock) {
@@ -50,59 +42,26 @@ class TicketCreated implements ShouldBroadcastNow
         } else {
             $slaTimerStatus = 'running';
         }
-        $isHistoricalResolved =
-            $this->ticket->latestIncident?->resolved_at !== null;
-        /*
-         * SLA hanya berjalan jika:
-         *
-         * - status belum resolved
-         * - kendala downtime
-         * - tidak ada Stop Clock
-         */
-        $slaTimerRunning =
-            $this->ticket->status !== 'resolved'
-            && $isDowntime
-            && ! $hasActiveStopClock;
 
         return [
             'ticketId' => $this->ticket->id,
-
             'ticketNumber' => $this->ticket->ticket_number,
-
             'ticketType' => $this->ticket->ticket_type,
 
             'priority' => $this->ticket->priority,
-
             'currentPriority' => $this->ticket->current_priority,
 
             'status' => $this->ticket->status,
 
             'reportedAt' => $this->ticket->reported_at?->toISOString(),
 
-            /*
-             * SLA Timer
-             *
-             * Untuk ticket baru biasanya 0.
-             * Jika ticket dibuat sebagai historical,
-             * calculateDowntimeSeconds() tetap bisa memberikan
-             * nilai sesuai incident.
-             */
-            'slaTimerSeconds' => $isHistoricalResolved
-                ? $this->ticket->calculateDowntimeSeconds()
-                : 0,
-
-            'slaTimerRunning' => $slaTimerRunning,
-
+            'slaTimerSeconds' => 0,
+            'slaTimerRunning' => $isDowntime && ! $hasActiveStopClock,
             'slaTimerStatus' => $slaTimerStatus,
 
-            /*
-             * Ticket Duration
-             */
-            'ticketDurationSeconds' => 0,
+            'ticketDurationSeconds' =>
+            $this->ticket->reported_at->diffInSeconds(now()),
 
-            /*
-             * User pembuat ticket
-             */
             'creator' => $this->ticket->creator
                 ? [
                     'id' => $this->ticket->creator->id,
@@ -110,13 +69,9 @@ class TicketCreated implements ShouldBroadcastNow
                 ]
                 : null,
 
-            /*
-             * User yang terakhir melakukan update
-             */
             'latestUpdate' => $this->ticket->latestUpdate
                 ? [
                     'id' => $this->ticket->latestUpdate->id,
-
                     'user' => $this->ticket->latestUpdate->user
                         ? [
                             'id' => $this->ticket->latestUpdate->user->id,
@@ -126,9 +81,6 @@ class TicketCreated implements ShouldBroadcastNow
                 ]
                 : null,
 
-            /*
-             * Customer / Site
-             */
             'customers' => $this->ticket->customers
                 ->map(function ($customer) {
                     return [

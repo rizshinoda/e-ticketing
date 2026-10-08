@@ -214,4 +214,10 @@ class Ticket extends Model
 
         return max(0, $totalSeconds - $stopClockSeconds);
     }
+
+    public function latestUpdate(): HasOne
+    {
+        return $this->hasOne(TicketUpdate::class, 'ticket_id')
+            ->latestOfMany('created_at');
+    }
 }
