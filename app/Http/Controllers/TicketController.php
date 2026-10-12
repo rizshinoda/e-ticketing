@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Events\TicketClosed;
 use App\Events\TicketCreated;
+use App\Events\TicketDeleted;
+use App\Events\TicketEdited;
 use App\Events\TicketReopened;
 use App\Events\TicketResolved;
 use App\Events\TicketStopClockEnded;
@@ -2856,7 +2858,17 @@ class TicketController extends Controller
                 'message' => 'Data ticket diperbarui.',
             ]);
         });
+        $ticket->refresh();
 
+        $ticket->load([
+            'creator',
+            'customers',
+            'latestIncident.category',
+            'latestUpdate.user',
+            'stopClocks',
+        ]);
+
+        event(new TicketEdited($ticket));
         /*
     |--------------------------------------------------------------------------
     | REDIRECT
@@ -2912,6 +2924,7 @@ class TicketController extends Controller
     */
 
         $ticket->delete();
+        event(new TicketDeleted($ticket->id));
 
         return to_route('tickets.index')
             ->with('success', 'Ticket berhasil dihapus.');

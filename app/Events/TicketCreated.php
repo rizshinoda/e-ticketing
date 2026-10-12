@@ -140,6 +140,20 @@ class TicketCreated implements ShouldBroadcastNow
                 })
                 ->values()
                 ->all(),
+
+            'latestIncident' => $this->ticket->latestIncident
+                ? [
+                    'id' => $this->ticket->latestIncident->id,
+                    'incident_number' => $this->ticket->latestIncident->incident_number,
+                    'kendala_id' => $this->ticket->latestIncident->kendala_id,
+                    'category' => $this->ticket->latestIncident->category
+                        ? [
+                            'id' => $this->ticket->latestIncident->category->id,
+                            'name' => $this->ticket->latestIncident->category->name,
+                        ]
+                        : null,
+                ]
+                : null,
         ];
     }
 }

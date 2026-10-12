@@ -3,6 +3,17 @@ import { Head } from '@inertiajs/vue3';
 import { useEchoPublic } from '@laravel/echo-vue';
 import { onUnmounted, ref } from 'vue';
 
+interface Kendala {
+    id: number;
+    name: string;
+}
+
+interface LatestIncident {
+    id: number;
+    incident_number: number;
+    kendala_id: number;
+    category: Kendala | null;
+}
 interface Ticket {
     id: number;
     ticket_number: string;
@@ -37,6 +48,7 @@ interface Ticket {
             name: string;
         } | null;
     } | null;
+    latest_incident: LatestIncident | null;
 }
 
 interface TicketCreatedEvent {
@@ -74,6 +86,7 @@ interface TicketCreatedEvent {
         site_name: string;
         no_jaringan: string | null;
     }[];
+    latestIncident: LatestIncident | null;
 }
 interface TicketUpdatedEvent {
     ticketId: number;
@@ -151,6 +164,58 @@ interface TicketReopenedEvent {
         site_name: string;
         no_jaringan: string | null;
     }[];
+    latestIncident: LatestIncident | null;
+}
+
+interface TicketEditedEvent {
+    ticketId: number;
+    ticketNumber: string;
+    ticketType: 'individual' | 'gamas';
+    priority: 'low' | 'medium' | 'high' | 'critical';
+    currentPriority: 'low' | 'medium' | 'high' | 'critical';
+    status: 'open' | 'on_progress' | 'resolved' | 'closed';
+    description: string | null;
+    reportedAt: string;
+
+    customers: {
+        id: number;
+        customer_name: string;
+        site_name: string;
+        no_jaringan: string | null;
+    }[];
+
+    latestIncident: {
+        id: number;
+        incident_number: number;
+        kendala_id: number;
+        reported_at: string;
+        resolved_at: string | null;
+        category: {
+            id: number;
+            name: string;
+        } | null;
+    } | null;
+
+    slaTimerSeconds: number;
+    slaTimerRunning: boolean;
+    slaTimerStatus: 'running' | 'stop_clock' | 'resolved' | 'not_applicable';
+    ticketDurationSeconds: number;
+
+    creator: {
+        id: number;
+        name: string;
+    } | null;
+
+    latestUpdate: {
+        id: number;
+        user: {
+            id: number;
+            name: string;
+        } | null;
+    } | null;
+}
+interface TicketDeletedEvent {
+    ticketId: number;
 }
 const props = defineProps<{
     tickets: Ticket[];
@@ -327,6 +392,7 @@ useEchoPublic(
             creator: event.creator,
 
             latest_update: event.latestUpdate,
+            latest_incident: event.latestIncident,
         };
 
         /**
@@ -526,11 +592,67 @@ useEchoPublic<TicketReopenedEvent>(
             creator: event.creator,
 
             latest_update: event.latestUpdate,
+            latest_incident: event.latestIncident,
         };
 
         tickets.value.unshift(reopenedTicket);
     },
 );
+
+
+useEchoPublic<TicketEditedEvent>(
+    'ticket-monitor',
+    '.TicketEdited',
+    (event) => {
+            console.log('TicketEdited diterima di Vue:', event);
+
+        const index = tickets.value.findIndex(
+            (ticket) => ticket.id === event.ticketId,
+        );
+
+        console.log('Index tiket:', index);
+        // Jika tiket tidak ada di tabel monitoring, tidak perlu diperbarui.
+        if (index === -1) return;
+
+        const existingTicket = tickets.value[index];
+
+        tickets.value[index] = {
+            ...existingTicket,
+            ticket_number: event.ticketNumber,
+            ticket_type: event.ticketType,
+            priority: event.priority,
+            current_priority: event.currentPriority,
+            status: event.status,
+            description: event.description,
+            reported_at: event.reportedAt,
+            customers: event.customers,
+            latest_incident: event.latestIncident,
+            sla_timer_seconds: event.slaTimerSeconds,
+            sla_timer_running: event.slaTimerRunning,
+            sla_timer_status: event.slaTimerStatus,
+            ticket_duration_seconds: event.ticketDurationSeconds,
+            creator: event.creator,
+            latest_update: event.latestUpdate,
+        };
+        console.log(
+    'Data tiket setelah diperbarui:',
+    tickets.value[index],
+);
+    },
+);
+
+useEchoPublic<TicketDeletedEvent>(
+    'ticket-monitor',
+    '.TicketDeleted',
+    (event) => {
+        console.log('MONITORING - TICKET DELETED:', event);
+
+        tickets.value = tickets.value.filter(
+            ticket => ticket.id !== event.ticketId
+        );
+    },
+);
+
 </script>
 
 <template>
@@ -622,7 +744,11 @@ useEchoPublic<TicketReopenedEvent>(
                             >
                                 Customer / Site
                             </th>
-
+                            <th
+                                class="px-5 py-3 text-left text-xs font-medium text-muted-foreground"
+                            >
+                                Kendala
+                            </th>
                             <th
                                 class="px-5 py-3 text-left text-xs font-medium tracking-wide text-muted-foreground uppercase"
                             >
@@ -724,7 +850,17 @@ useEchoPublic<TicketReopenedEvent>(
                                     +{{ ticket.customers.length - 1 }} site
                                 </div>
                             </td>
+                            <td class="px-5 py-4 align-top">
+                                <div class="inline-flex items-center rounded-md border border-border/70 bg-muted/40 px-2.5 py-1 text-xs font-medium text-foreground"
+">
+                                    {{
+                                        ticket.latest_incident?.category
+                                            ?.name ?? '-'
+                                    }}
+                                </div>
 
+                    
+                            </td>
                             <!-- ========================================= -->
                             <!-- PRIORITY -->
                             <!-- ========================================= -->
@@ -813,7 +949,7 @@ useEchoPublic<TicketReopenedEvent>(
                                 </div>
 
                                 <div class="mt-1 text-xs text-muted-foreground">
-                                    Creator
+                                    Pembuat
                                 </div>
                             </td>
 
