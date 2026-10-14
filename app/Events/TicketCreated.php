@@ -40,30 +40,33 @@ class TicketCreated implements ShouldBroadcastNow
         $isDowntime =
             $this->ticket->latestIncident?->category?->is_downtime ?? false;
 
-        /*
-         * Tentukan status SLA.
-         */
+        $isHistoricalResolved =
+            $this->ticket->latestIncident?->resolved_at !== null;
+
+        // Tentukan status SLA.
         if (! $isDowntime) {
             $slaTimerStatus = 'not_applicable';
+        } elseif (
+            $this->ticket->status === 'resolved'
+            || $isHistoricalResolved
+        ) {
+            $slaTimerStatus = 'resolved';
         } elseif ($hasActiveStopClock) {
             $slaTimerStatus = 'stop_clock';
         } else {
             $slaTimerStatus = 'running';
         }
-        $isHistoricalResolved =
-            $this->ticket->latestIncident?->resolved_at !== null;
-        /*
-         * SLA hanya berjalan jika:
-         *
-         * - status belum resolved
-         * - kendala downtime
-         * - tidak ada Stop Clock
-         */
+
+        // Tentukan apakah SLA boleh berjalan.
         $slaTimerRunning =
             $this->ticket->status !== 'resolved'
+            && ! $isHistoricalResolved
             && $isDowntime
             && ! $hasActiveStopClock;
+        $calculatedAt = now();
 
+        $slaTimerSeconds = $this->ticket
+            ->calculateDowntimeSeconds($calculatedAt);
         return [
             'ticketId' => $this->ticket->id,
 
@@ -87,9 +90,9 @@ class TicketCreated implements ShouldBroadcastNow
              * calculateDowntimeSeconds() tetap bisa memberikan
              * nilai sesuai incident.
              */
-            'slaTimerSeconds' => $isHistoricalResolved
-                ? $this->ticket->calculateDowntimeSeconds()
-                : 0,
+            'slaTimerSeconds' => $slaTimerSeconds,
+
+            'slaTimerCalculatedAt' => $calculatedAt->toISOString(),
 
             'slaTimerRunning' => $slaTimerRunning,
 
@@ -98,8 +101,8 @@ class TicketCreated implements ShouldBroadcastNow
             /*
              * Ticket Duration
              */
-            'ticketDurationSeconds' => 0,
-
+            'ticketDurationSeconds' =>
+            $this->ticket->calculateTicketDurationSeconds(),
             /*
              * User pembuat ticket
              */

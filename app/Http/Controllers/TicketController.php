@@ -99,35 +99,14 @@ class TicketController extends Controller
             ->paginate(10)
             ->withQueryString();
 
-        $ticketStats = [
-            'active' => Ticket::whereIn('status', [
-                'open',
-                'on_progress',
-            ])->count(),
 
-            'resolved_today' => Ticket::where('status', 'resolved')
-                ->whereDate('resolved_at', today())
-                ->count(),
-
-            'closed_today' => Ticket::where('status', 'closed')
-                ->whereDate('closed_at', today())
-                ->count(),
-            'critical_active' => Ticket::whereIn('status', [
-                'open',
-                'on_progress',
-                'resolved',
-            ])
-                ->get()
-                ->filter(fn($ticket) => $ticket->calculateCurrentPriority() === 'critical')
-                ->count(),
-        ];
         $kendalas = TicketCategory::query()
             ->orderBy('name')
             ->get(['id', 'name']);
         return Inertia::render('Tickets/Index', [
             'tickets' => $tickets,
 
-            'ticketStats' => $ticketStats,
+            'ticketStats' => Ticket::dashboardStats(),
             'kendalas' => $kendalas,
 
             'filters' => [
@@ -2953,6 +2932,7 @@ class TicketController extends Controller
 
     public function monitoring(): Response
     {
+
         $tickets = Ticket::query()
             ->with([
                 'customers',
@@ -2968,9 +2948,8 @@ class TicketController extends Controller
             ])
             ->latest('reported_at')
             ->get();
-
-        $tickets->each(function ($ticket) {
-            /*
+        $calculatedAt = now();
+        $tickets->each(function ($ticket) use ($calculatedAt) {            /*
          * Cek apakah ada Stop Clock yang masih aktif.
          */
             $hasActiveStopClock = $ticket->stopClocks
@@ -2982,7 +2961,12 @@ class TicketController extends Controller
          * Hitung SLA Timer.
          */
             $ticket->sla_timer_seconds =
-                $ticket->calculateDowntimeSeconds();
+                $ticket->calculateDowntimeSeconds($calculatedAt);
+
+            $ticket->setAttribute(
+                'sla_timer_calculated_at',
+                $calculatedAt->toISOString()
+            );
 
             /*
          * Tentukan apakah SLA sedang berjalan.
@@ -3023,13 +3007,12 @@ class TicketController extends Controller
          *   → sampai closed_at
          */
             $ticket->ticket_duration_seconds =
-                $ticket->reported_at->diffInSeconds(
-                    $ticket->closed_at ?? now()
-                );
+                $ticket->calculateTicketDurationSeconds();
         });
 
         return Inertia::render('Tickets/Monitoring', [
             'tickets' => $tickets,
+            'ticketStats' => Ticket::dashboardStats(),
         ]);
     }
 }

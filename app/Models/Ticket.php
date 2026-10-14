@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Carbon\CarbonInterface;
 
 class Ticket extends Model
 {
@@ -171,8 +172,29 @@ class Ticket extends Model
         return "{$hours} jam {$remainingMinutes} menit";
     }
 
-    public function calculateDowntimeSeconds(): int
+    public function calculateTicketDurationSeconds(): int
     {
+        $start = $this->created_at;
+
+        if (!$start) {
+            return 0;
+        }
+
+        // Jika tiket sudah ditutup, gunakan waktu penutupan.
+        // Selain itu, hitung sampai waktu sekarang.
+        $end = $this->status === 'closed' && $this->closed_at
+            ? $this->closed_at
+            : now();
+
+        return max(
+            0,
+            $end->getTimestamp() - $start->getTimestamp()
+        );
+    }
+
+    public function calculateDowntimeSeconds(
+        ?CarbonInterface $asOf = null
+    ): int {
         $incident = $this->latestIncident()
             ->with('category')
             ->first();
@@ -188,8 +210,7 @@ class Ticket extends Model
         }
 
         $start = $incident->reported_at;
-        $end = $incident->resolved_at ?? now();
-
+        $end = $incident->resolved_at ?? $asOf ?? now();
         $totalSeconds = $start->diffInSeconds($end);
 
         $stopClockSeconds = $this->stopClocks()
@@ -219,5 +240,29 @@ class Ticket extends Model
     {
         return $this->hasOne(TicketUpdate::class, 'ticket_id')
             ->latestOfMany('created_at');
+    }
+
+    // App\Models\Ticket
+
+    public static function dashboardStats(): array
+    {
+        $activeStatuses = ['open', 'on_progress', 'resolved'];
+
+        return [
+            'active' => static::whereIn('status', $activeStatuses)->count(),
+
+            'resolved_today' => static::where('status', 'resolved')
+                ->whereDate('resolved_at', today())
+                ->count(),
+
+            'closed_today' => static::where('status', 'closed')
+                ->whereDate('closed_at', today())
+                ->count(),
+
+            'critical_active' => static::whereIn('status', $activeStatuses)
+                ->get()
+                ->filter(fn($ticket) => $ticket->calculateCurrentPriority() === 'critical')
+                ->count(),
+        ];
     }
 }
