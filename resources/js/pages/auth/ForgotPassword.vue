@@ -11,56 +11,70 @@ import { email } from '@/routes/password';
 
 defineOptions({
     layout: {
-        title: 'Forgot password',
-        description: 'Enter your email to receive a password reset link',
+        title: 'Lupa kata sandi',
+        description:
+            'Masukkan email Anda untuk menerima tautan atur ulang kata sandi',
     },
 });
 
 defineProps<{
     status?: string;
 }>();
+
+// Gaya kolom input: lebih tinggi, sudut membulat, fokus berwarna amber.
+const fieldClass =
+    'h-11 rounded-xl focus-visible:border-amber-500 focus-visible:ring-amber-500/30';
 </script>
 
 <template>
-    <Head title="Forgot password" />
+    <Head title="Lupa kata sandi" />
 
     <div
-        v-if="status"
-        class="mb-4 text-center text-sm font-medium text-green-600"
+        class="rounded-2xl border bg-card p-6 text-card-foreground shadow-sm sm:p-8"
     >
-        {{ status }}
-    </div>
+        <div
+            v-if="status"
+            class="mb-5 rounded-xl bg-green-500/10 px-4 py-3 text-center text-sm font-medium text-green-700 dark:text-green-400"
+        >
+            {{ status }}
+        </div>
 
-    <div class="space-y-6">
-        <Form v-bind="email.form()" v-slot="{ errors, processing }">
-            <div class="grid gap-2">
-                <Label for="email">Email address</Label>
-                <Input
-                    id="email"
-                    type="email"
-                    name="email"
-                    autocomplete="off"
-                    autofocus
-                    placeholder="email@example.com"
-                />
-                <InputError :message="errors.email" />
-            </div>
+        <Form
+            v-bind="email.form()"
+            v-slot="{ errors, processing }"
+            class="flex flex-col gap-6"
+        >
+            <div class="grid gap-5">
+                <div class="grid gap-2">
+                    <Label for="email">Alamat email</Label>
+                    <Input
+                        id="email"
+                        type="email"
+                        name="email"
+                        autocomplete="off"
+                        autofocus
+                        placeholder="email@example.com"
+                        :class="fieldClass"
+                    />
+                    <InputError :message="errors.email" />
+                </div>
 
-            <div class="my-6 flex items-center justify-start">
                 <Button
-                    class="w-full"
+                    class="h-11 w-full rounded-xl bg-amber-400 text-sm font-semibold text-neutral-950 transition-all hover:bg-amber-300 active:scale-[0.98]"
                     :disabled="processing"
                     data-test="email-password-reset-link-button"
                 >
                     <Spinner v-if="processing" />
-                    Email password reset link
+                    Kirim tautan atur ulang
                 </Button>
             </div>
-        </Form>
 
-        <div class="space-x-1 text-center text-sm text-muted-foreground">
-            <span>Or, return to</span>
-            <TextLink :href="login()">log in</TextLink>
-        </div>
+            <div
+                class="space-x-1 border-t border-dashed border-border pt-6 text-center text-sm text-muted-foreground"
+            >
+                <span>Ingat kata sandi Anda?</span>
+                <TextLink :href="login()">Kembali masuk</TextLink>
+            </div>
+        </Form>
     </div>
 </template>

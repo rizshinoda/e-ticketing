@@ -15,8 +15,8 @@ import { request } from '@/routes/password';
 
 defineOptions({
     layout: {
-        title: 'Log in to your account',
-        description: 'Enter your email and password below to log in',
+        title: 'Masuk ke akun Anda',
+        description: 'Masukkan email dan kata sandi untuk melanjutkan',
     },
 });
 
@@ -24,87 +24,112 @@ defineProps<{
     status?: string;
     canResetPassword: boolean;
 }>();
+
+// Gaya kolom input: lebih tinggi, sudut membulat, fokus berwarna amber.
+const fieldClass =
+    'h-11 rounded-xl focus-visible:border-amber-500 focus-visible:ring-amber-500/30';
+
+// PasswordInput membungkus input di dalamnya, jadi gayanya diarahkan ke <input>.
+const passwordFieldClass =
+    'h-11 [&_input]:h-11 [&_input]:rounded-xl [&_input]:focus-visible:border-amber-500 [&_input]:focus-visible:ring-amber-500/30';
 </script>
 
 <template>
-    <Head title="Log in" />
+    <Head title="Masuk" />
 
     <div
-        v-if="status"
-        class="mb-4 text-center text-sm font-medium text-green-600"
+        class="rounded-2xl border bg-card p-6 text-card-foreground shadow-sm sm:p-8"
     >
-        {{ status }}
-    </div>
+        <div
+            v-if="status"
+            class="mb-4 rounded-xl bg-green-500/10 px-4 py-3 text-center text-sm font-medium text-green-700 dark:text-green-400"
+        >
+            {{ status }}
+        </div>
 
-    <PasskeyVerify />
+        <PasskeyVerify />
 
-    <Form
-        v-bind="store.form()"
-        :reset-on-success="['password']"
-        v-slot="{ errors, processing }"
-        class="flex flex-col gap-6"
-    >
-        <div class="grid gap-6">
-            <div class="grid gap-2">
-                <Label for="email">Email address</Label>
-                <Input
-                    id="email"
-                    type="email"
-                    name="email"
-                    required
-                    autofocus
-                    :tabindex="1"
-                    autocomplete="email"
-                    placeholder="email@example.com"
-                />
-                <InputError :message="errors.email" />
-            </div>
+        <Form
+            v-bind="store.form()"
+            :reset-on-success="['password']"
+            v-slot="{ errors, processing }"
+            class="flex flex-col gap-6"
+        >
+            <div class="grid gap-5">
+                <div class="grid gap-2">
+                    <Label for="email">Alamat email</Label>
+                    <Input
+                        id="email"
+                        type="email"
+                        name="email"
+                        required
+                        autofocus
+                        :tabindex="1"
+                        autocomplete="email"
+                        placeholder="email@example.com"
+                        :class="fieldClass"
+                    />
+                    <InputError :message="errors.email" />
+                </div>
 
-            <div class="grid gap-2">
+                <div class="grid gap-2">
+                    <Label for="password">Kata sandi</Label>
+                    <PasswordInput
+                        id="password"
+                        name="password"
+                        required
+                        :tabindex="2"
+                        autocomplete="current-password"
+                        placeholder="Masukkan kata sandi"
+                        :class="passwordFieldClass"
+                    />
+                    <InputError :message="errors.password" />
+                </div>
+
                 <div class="flex items-center justify-between">
-                    <Label for="password">Password</Label>
+                    <Label
+                        for="remember"
+                        class="flex items-center gap-2.5 font-normal"
+                    >
+                        <Checkbox
+                            id="remember"
+                            name="remember"
+                            :tabindex="3"
+                            class="data-[state=checked]:border-amber-500 data-[state=checked]:bg-amber-400 data-[state=checked]:text-neutral-950"
+                        />
+                        <span>Ingat saya</span>
+                    </Label>
+
                     <TextLink
                         v-if="canResetPassword"
                         :href="request()"
                         class="text-sm"
                         :tabindex="5"
                     >
-                        Forgot your password?
+                        Lupa kata sandi?
                     </TextLink>
                 </div>
-                <PasswordInput
-                    id="password"
-                    name="password"
-                    required
-                    :tabindex="2"
-                    autocomplete="current-password"
-                    placeholder="Password"
-                />
-                <InputError :message="errors.password" />
+
+                <Button
+                    type="submit"
+                    class="h-11 w-full rounded-xl bg-amber-400 text-sm font-semibold text-neutral-950 transition-all hover:bg-amber-300 active:scale-[0.98]"
+                    :tabindex="4"
+                    :disabled="processing"
+                    data-test="login-button"
+                >
+                    <Spinner v-if="processing" />
+                    Masuk
+                </Button>
             </div>
 
-            <div class="flex items-center justify-between">
-                <Label for="remember" class="flex items-center space-x-3">
-                    <Checkbox id="remember" name="remember" :tabindex="3" />
-                    <span>Remember me</span>
-                </Label>
-            </div>
-
-            <Button
-                type="submit"
-                class="mt-4 w-full"
-                :tabindex="4"
-                :disabled="processing"
-                data-test="login-button"
+            <div
+                class="border-t border-dashed border-border pt-6 text-center text-sm text-muted-foreground"
             >
-                <Spinner v-if="processing" />
-                Log in
-            </Button>
-        </div>
-
-        <div class="text-center text-sm text-muted-foreground">
-            Don't have an account?
-            <TextLink :href="register()" :tabindex="5">Sign up</TextLink>
-        </div>
-    </Form>
+                Belum punya akun?
+                <TextLink :href="register()" :tabindex="5"
+                    >Daftar sekarang</TextLink
+                >
+            </div>
+        </Form>
+    </div>
 </template>

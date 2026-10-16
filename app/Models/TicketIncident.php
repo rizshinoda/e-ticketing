@@ -18,6 +18,7 @@ class TicketIncident extends Model
         'kendala_id',
         'reported_at',
         'resolved_at',
+        'resolution',
 
     ];
 

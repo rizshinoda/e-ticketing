@@ -3,6 +3,8 @@
 use App\Events\TestReverbEvent;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\RestitutionController;
+use App\Http\Controllers\SlaRuleController;
+use App\Http\Controllers\SlaTestController;
 use App\Http\Controllers\TicketCategoryController;
 use App\Http\Controllers\TicketController;
 use Illuminate\Support\Facades\Route;
@@ -38,6 +40,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ])->name('monitor');
             Route::get('/monitoring', [TicketController::class, 'monitoring'])
                 ->name('monitoring');
+
+
             Route::get('/{ticket}', [
                 TicketController::class,
                 'show',
@@ -144,6 +148,34 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 'sites',
             ])->name('sites');
         });
+
+    Route::get('/admin/sla-test', [
+        SlaTestController::class,
+        'index',
+    ])->name('admin.sla-test.index');
+
+
+
+    // Tambahkan di dalam grup route admin yang sudah ada.
+    Route::get('/sla-rules', [
+        SlaRuleController::class,
+        'index',
+    ])->name('sla-rules.index');
+
+    Route::post('/sla-rules', [
+        SlaRuleController::class,
+        'store',
+    ])->name('sla-rules.store');
+
+    Route::put('/sla-rules/{slaRule}', [
+        SlaRuleController::class,
+        'update',
+    ])->name('sla-rules.update');
+
+    Route::delete('/sla-rules/{slaRule}', [
+        SlaRuleController::class,
+        'destroy',
+    ])->name('sla-rules.destroy');
 });
 
 require __DIR__ . '/settings.php';

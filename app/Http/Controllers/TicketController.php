@@ -1345,6 +1345,8 @@ class TicketController extends Controller
              */
                 $latestIncident->update([
                     'resolved_at' => $incidentResolvedAt,
+                    'resolution' => $validated['resolution'],
+
                 ]);
 
                 // Update Ticket
@@ -1452,6 +1454,8 @@ class TicketController extends Controller
          */
             $latestIncident->update([
                 'resolved_at' => $incidentResolvedAt,
+                'resolution' => $validated['resolution'],
+
             ]);
 
             // Update Ticket
