@@ -105,14 +105,20 @@ class SlaCalculationService
      * Asumsi:
      * Global dihitung berdasarkan total site-service time.
      */
+
     public function calculateGlobal(
         int $pelangganId,
         CarbonInterface $periodStart,
         CarbonInterface $periodEnd,
     ): array {
-        [$start, $end, $periodSeconds] =
-            $this->normalizePeriod($periodStart, $periodEnd);
+        [$start, $end] = $this->normalizePeriod(
+            $periodStart,
+            $periodEnd
+        );
 
+        /*
+     * Target SLA Global harus mencakup seluruh periode laporan.
+     */
         $rule = $this->resolveRuleForPeriod(
             pelangganId: $pelangganId,
             scope: 'global',
@@ -121,35 +127,86 @@ class SlaCalculationService
             end: $end,
         );
 
+        /*
+     * Ambil hanya site yang:
+     * 1. Milik pelanggan yang dipilih.
+     * 2. Berstatus active saat laporan dibuat.
+     * 3. Sudah mulai layanan sebelum periode laporan berakhir.
+     *
+     * tanggal_akhir sengaja tidak digunakan karena datanya
+     * belum diperbarui secara konsisten.
+     */
         $sites = OnlineBilling::query()
             ->where('pelanggan_id', $pelangganId)
             ->where('status', 'active')
+            ->whereNotNull('tanggal_mulai')
+            ->whereDate(
+                'tanggal_mulai',
+                '<',
+                $end->toDateString()
+            )
             ->orderBy('id')
-            ->get(['id']);
+            ->get([
+                'id',
+                'tanggal_mulai',
+            ]);
 
         $siteResults = [];
 
         foreach ($sites as $site) {
+            /*
+         * Awal layanan yang dihitung adalah tanggal yang
+         * paling akhir antara awal laporan dan tanggal mulai.
+         */
+            $siteStart = $start;
+
+            $serviceStart = CarbonImmutable::parse(
+                $site->tanggal_mulai
+            )->startOfDay();
+
+            if ($serviceStart->greaterThan($siteStart)) {
+                $siteStart = $serviceStart;
+            }
+
+            // Akhir layanan mengikuti akhir periode laporan.
+            // tanggal_akhir Online Billing tidak digunakan.
+            $siteEnd = $end;
+
+            if (!$siteEnd->greaterThan($siteStart)) {
+                continue;
+            }
+
+            /*
+         * Hitung SLA site menggunakan periode layanan aktual
+         * yang berada di dalam periode laporan.
+         */
             $siteResults[] = $this->calculateSite(
                 pelangganId: $pelangganId,
-                onlineBillingId: $site->id,
-                periodStart: $start,
-                periodEnd: $end,
+                onlineBillingId: (int) $site->id,
+                periodStart: $siteStart,
+                periodEnd: $siteEnd,
             );
         }
 
         $siteCount = count($siteResults);
 
-        $totalServiceSeconds = $periodSeconds * $siteCount;
+        /*
+     * Total waktu layanan adalah jumlah waktu layanan
+     * seluruh site yang berhasil dihitung.
+     */
+        $totalServiceSeconds = array_sum(
+            array_column($siteResults, 'total_service_seconds')
+        );
 
-        // Jumlahkan downtime untuk setiap site.
-        // Satu insiden GAMAS akan dihitung pada setiap
-        // site yang terhubung dengan tiket tersebut.
+        /*
+     * Akumulasi downtime dari masing-masing site.
+     * Setiap site sudah menghitung durasi insidennya sendiri.
+     */
         $totalDowntimeSeconds = array_sum(
             array_column($siteResults, 'downtime_seconds')
         );
 
-        $availability = $siteCount > 0
+        $availability = $totalServiceSeconds > 0
             ? $this->calculateAvailability(
                 $totalServiceSeconds,
                 $totalDowntimeSeconds,
@@ -159,49 +216,51 @@ class SlaCalculationService
         $target = $rule?->sla_percentage !== null
             ? (float) $rule->sla_percentage
             : null;
+
+        /*
+     * Hitung jumlah insiden-site yang belum selesai.
+     */
         $pendingSiteIncidentsCount = array_sum(
-            array_column($siteResults, 'pending_incidents_count')
+            array_column(
+                $siteResults,
+                'pending_incidents_count'
+            )
         );
 
         $reportStatus = $pendingSiteIncidentsCount > 0
             ? 'provisional'
             : (
-                $target === null
+                $target === null || $availability === null
                 ? 'missing_sla_rule'
                 : 'ready_to_finalize'
             );
+
         return [
             'scope' => 'global',
-
             'pelanggan_id' => $pelangganId,
 
             'period_start' => $start->toIso8601String(),
-
             'period_end' => $end->toIso8601String(),
 
             'sla_rule_id' => $rule?->id,
-
             'target_sla_percentage' => $target,
-
             'availability_percentage' => $availability,
-
-            'site_count' => $siteCount,
-
-            'total_downtime_site_seconds' =>
-            $totalDowntimeSeconds,
-
-            'total_service_seconds' => $totalServiceSeconds,
-
             'is_sla_met' => $this->isSlaMet(
                 $availability,
                 $target,
             ),
 
-            'sites' => $siteResults,
+            'site_count' => $siteCount,
+            'total_downtime_site_seconds' => $totalDowntimeSeconds,
+            'total_service_seconds' => $totalServiceSeconds,
+
             'pending_site_incidents_count' => $pendingSiteIncidentsCount,
             'report_status' => $reportStatus,
+
+            'sites' => $siteResults,
         ];
     }
+
 
     /**
      * Hitung downtime efektif untuk satu site.
@@ -413,6 +472,9 @@ class SlaCalculationService
         CarbonImmutable $start,
         CarbonImmutable $end,
     ): int {
+        $startString = $start->toDateTimeString();
+        $endString = $end->toDateTimeString();
+
         return DB::table('ticket_customers as tc')
             ->join(
                 'ticket_incidents as ti',
@@ -428,8 +490,28 @@ class SlaCalculationService
             )
             ->where('tc.online_billing_id', $onlineBillingId)
             ->where('categories.is_downtime', true)
-            ->whereNull('ti.resolved_at')
-            ->where('ti.reported_at', '<', $end->toDateTimeString())
+
+            // Insiden harus sudah dimulai sebelum periode berakhir.
+            ->where('ti.reported_at', '<', $endString)
+
+            // Pending jika belum selesai atau belum memiliki resolution.
+            ->where(function ($query) use ($startString) {
+                $query->whereNull('ti.resolved_at')
+
+                    ->orWhere(function ($historical) use ($startString) {
+                        $historical
+                            ->whereNotNull('ti.resolved_at')
+                            ->whereNull('ti.resolution')
+
+                            // Historical harus beririsan dengan periode.
+                            ->where(
+                                'ti.resolved_at',
+                                '>',
+                                $startString
+                            );
+                    });
+            })
+
             ->distinct()
             ->count('ti.id');
     }

@@ -507,6 +507,10 @@ function formatDuration(value: unknown): string {
                                 <tr>
                                     <th class="px-4 py-3">Site</th>
                                     <th class="px-4 py-3">Target SLA Site</th>
+                                    <th class="px-4 py-3">
+                                        Total Waktu Layanan
+                                    </th>
+
                                     <th class="px-4 py-3">Availability</th>
                                     <th class="px-4 py-3">Downtime</th>
                                     <th class="px-4 py-3">Status Site</th>
@@ -535,6 +539,14 @@ function formatDuration(value: unknown): string {
                                         {{
                                             formatPercent(
                                                 site.target_sla_percentage,
+                                            )
+                                        }}
+                                    </td>
+
+                                    <td class="px-4 py-3 whitespace-nowrap">
+                                        {{
+                                            formatDuration(
+                                                site.total_service_seconds,
                                             )
                                         }}
                                     </td>

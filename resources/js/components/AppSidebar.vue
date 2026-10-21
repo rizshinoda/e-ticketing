@@ -8,6 +8,8 @@ import {
     Undo2,
     Settings2,
     FlaskConical,
+    CalendarDays,
+    History,
 } from '@lucide/vue';
 import { computed } from 'vue';
 
@@ -64,11 +66,6 @@ const menuGroups: MenuGroup[] = [
                 href: '/tickets',
                 icon: Ticket,
             },
-            {
-                title: 'Restitusi',
-                href: '/restitution',
-                icon: Undo2,
-            },
         ],
     },
     {
@@ -84,6 +81,17 @@ const menuGroups: MenuGroup[] = [
                 href: '/admin/sla-test',
                 icon: FlaskConical,
             },
+            {
+                title: 'Laporan SLA Bulanan',
+                href: '/sla-reports',
+                icon: CalendarDays,
+                exact: true,
+            },
+            {
+                title: 'Riwayat Laporan SLA',
+                href: '/sla-reports/history',
+                icon: History,
+            },
         ],
     },
     {
@@ -97,7 +105,6 @@ const menuGroups: MenuGroup[] = [
         ],
     },
 ];
-
 const page = usePage();
 
 // href bisa berupa string atau objek Wayfinder ({ url, method })

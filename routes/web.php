@@ -3,6 +3,7 @@
 use App\Events\TestReverbEvent;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\RestitutionController;
+use App\Http\Controllers\SlaMonthlyReportController;
 use App\Http\Controllers\SlaRuleController;
 use App\Http\Controllers\SlaTestController;
 use App\Http\Controllers\TicketCategoryController;
@@ -171,11 +172,33 @@ Route::middleware(['auth', 'verified'])->group(function () {
         SlaRuleController::class,
         'update',
     ])->name('sla-rules.update');
-
+    Route::get('/sla-reports', [
+        SlaMonthlyReportController::class,
+        'index',
+    ])->name('sla-reports.index');
     Route::delete('/sla-rules/{slaRule}', [
         SlaRuleController::class,
         'destroy',
     ])->name('sla-rules.destroy');
+    Route::get('/sla-reports', [
+        SlaMonthlyReportController::class,
+        'index',
+    ])->name('sla-reports.index');
+
+    Route::post('/sla-reports/finalize', [
+        SlaMonthlyReportController::class,
+        'finalize',
+    ])->name('sla-reports.finalize');
+    Route::get(
+        '/sla-reports/history',
+        [SlaMonthlyReportController::class, 'history']
+    )->name('sla-reports.history');
+    Route::get(
+        '/sla-reports/{report}/pdf',
+        [SlaMonthlyReportController::class, 'downloadPdf']
+    )
+        ->whereNumber('report')
+        ->name('sla-reports.pdf');
 });
 
 require __DIR__ . '/settings.php';

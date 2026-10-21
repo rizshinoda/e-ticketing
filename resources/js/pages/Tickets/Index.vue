@@ -859,7 +859,7 @@ const formatDate = (date: string) => {
                                     </span>
                                 </td>
                                 <!-- Umur -->
-                                <td class="px-5 py-4 align-top">
+                                <td class="px-3 py-4 align-top">
                                     <span class="text-sm text-muted-foreground">
                                         {{ ticket.ticket_age }}
                                     </span>
