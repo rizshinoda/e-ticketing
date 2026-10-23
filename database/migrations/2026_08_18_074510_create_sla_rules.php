@@ -62,11 +62,7 @@ return new class extends Migration
      */
             $table->date('effective_from');
 
-            /*
-     * Akhir berlakunya aturan SLA.
-     *
-     * NULL = masih berlaku.
-     */
+
             $table->date('effective_until')
                 ->nullable();
 

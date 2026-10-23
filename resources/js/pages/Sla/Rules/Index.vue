@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { useForm, router } from '@inertiajs/vue3';
+import { useForm, router, Link } from '@inertiajs/vue3';
 
 interface Customer {
     id: number;
@@ -150,6 +150,12 @@ function scopeLabel(scope: string): string {
                         Aturan Global tidak terikat pada satu site. Aturan Site
                         hanya berlaku untuk site yang dipilih.
                     </p>
+                    <Link
+                        href="/sla-rules/bulk-sites"
+                        class="inline-flex items-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
+                    >
+                        Terapkan Target ke Banyak Site
+                    </Link>
                 </div>
 
                 <button

@@ -199,6 +199,15 @@ Route::middleware(['auth', 'verified'])->group(function () {
     )
         ->whereNumber('report')
         ->name('sla-reports.pdf');
+    Route::get(
+        '/sla-rules/bulk-sites',
+        [SlaRuleController::class, 'bulkSites']
+    )->name('sla-rules.bulk-sites');
+
+    Route::post(
+        '/sla-rules/bulk-sites',
+        [SlaRuleController::class, 'storeBulkSites']
+    )->name('sla-rules.bulk-sites.store');
 });
 
 require __DIR__ . '/settings.php';
