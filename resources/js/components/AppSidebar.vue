@@ -76,11 +76,11 @@ const menuGroups: MenuGroup[] = [
                 href: '/sla-rules',
                 icon: Settings2,
             },
-            {
-                title: 'SLA Test',
-                href: '/admin/sla-test',
-                icon: FlaskConical,
-            },
+            // {
+            //     title: 'SLA Test',
+            //     href: '/admin/sla-test',
+            //     icon: FlaskConical,
+            // },
             {
                 title: 'Laporan SLA Bulanan',
                 href: '/sla-reports',

@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { Head, Link, useForm } from '@inertiajs/vue3';
-
+import { computed, ref, watch } from 'vue';
+import { Head, Link, router, useForm } from '@inertiajs/vue3';
+import {
+    confirmAction,
+    showSuccessToast,
+    showErrorToast,
+} from '@/lib/sla-notifications';
 interface Customer {
     id: number;
     nama_pelanggan: string;
@@ -12,62 +16,132 @@ interface Site {
     pelanggan_id: number;
     nama_site: string;
     no_jaringan: string | null;
+    active_sla_percentage?: number | string | null;
+    active_sla_rule_count?: number | string | null;
+}
+
+interface PaginationLink {
+    url: string | null;
+    label: string;
+    active: boolean;
+}
+
+interface Paginated<T> {
+    data: T[];
+    links: PaginationLink[];
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+    from: number | null;
+    to: number | null;
 }
 
 const props = defineProps<{
     customers: Customer[];
-    sites: Site[];
-    today: string;
+    sites: Paginated<Site>;
+    filters: {
+        pelanggan_id?: string | number | null;
+        search?: string;
+    };
+    success?: string | null;
 }>();
 
-const search = ref('');
+const search = ref(props.filters?.search ?? '');
 
 const form = useForm({
-    pelanggan_id: '',
+    pelanggan_id: String(props.filters?.pelanggan_id ?? ''),
     online_billing_ids: [] as number[],
     sla_percentage: 99,
-    effective_from: props.today,
 });
 
-const presets = [
-    { label: '95%', value: 95 },
-    { label: '98%', value: 98 },
-    { label: '99%', value: 99 },
-    { label: '99,5%', value: 99.5 },
-    { label: '99,9%', value: 99.9 },
-    { label: '99,99%', value: 99.99 },
-];
+const presets = [95, 98, 99, 99.5, 99.9, 99.99];
 
-const customerSites = computed(() =>
-    props.sites.filter(
-        (site) => String(site.pelanggan_id) === form.pelanggan_id,
-    ),
-);
+const visibleSites = computed(() => props.sites.data ?? []);
 
-const visibleSites = computed(() => {
-    const keyword = search.value.trim().toLocaleLowerCase();
+const allVisibleSelected = computed(() => {
+    if (visibleSites.value.length === 0) return false;
 
-    if (!keyword) return customerSites.value;
-
-    return customerSites.value.filter((site) =>
-        `${site.nama_site} ${site.no_jaringan ?? ''}`
-            .toLocaleLowerCase()
-            .includes(keyword),
+    return visibleSites.value.every((site) =>
+        form.online_billing_ids.includes(site.id),
     );
 });
 
-const allVisibleSelected = computed(
+const selectedVisibleCount = computed(
     () =>
-        visibleSites.value.length > 0 &&
-        visibleSites.value.every((site) =>
+        visibleSites.value.filter((site) =>
             form.online_billing_ids.includes(site.id),
-        ),
+        ).length,
 );
+
+const selectedCustomerName = computed(() => {
+    const customer = props.customers.find(
+        (item) => String(item.id) === form.pelanggan_id,
+    );
+
+    return customer?.nama_pelanggan ?? '';
+});
+
+watch(
+    () => props.filters?.search,
+    (value) => {
+        search.value = value ?? '';
+    },
+);
+
+watch(
+    () => props.filters?.pelanggan_id,
+    (value) => {
+        const nextValue = String(value ?? '');
+
+        if (form.pelanggan_id !== nextValue) {
+            form.pelanggan_id = nextValue;
+            form.online_billing_ids = [];
+        }
+    },
+);
+
+function loadSites() {
+    router.get(
+        '/sla-rules/bulk-sites',
+        {
+            pelanggan_id: form.pelanggan_id || undefined,
+            search: search.value.trim() || undefined,
+        },
+        {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true,
+        },
+    );
+}
 
 function changeCustomer() {
     form.online_billing_ids = [];
+    form.clearErrors();
     search.value = '';
-    form.clearErrors('pelanggan_id', 'online_billing_ids');
+
+    loadSites();
+}
+
+function applySearch() {
+    loadSites();
+}
+
+function clearSearch() {
+    search.value = '';
+    loadSites();
+}
+
+function toggleSite(siteId: number) {
+    const index = form.online_billing_ids.indexOf(siteId);
+
+    if (index !== -1) {
+        form.online_billing_ids.splice(index, 1);
+        return;
+    }
+
+    form.online_billing_ids.push(siteId);
 }
 
 function toggleVisibleSites() {
@@ -80,301 +154,590 @@ function toggleVisibleSites() {
         return;
     }
 
-    form.online_billing_ids = Array.from(
-        new Set([...form.online_billing_ids, ...visibleIds]),
-    );
+    const selectedIds = new Set(form.online_billing_ids);
+
+    visibleIds.forEach((id) => selectedIds.add(id));
+
+    form.online_billing_ids = Array.from(selectedIds);
 }
 
-function submit() {
-    if (
-        !window.confirm(
-            `Terapkan target SLA ${String(form.sla_percentage).replace('.', ',')}% ` +
-                `ke ${form.online_billing_ids.length} site mulai ${form.effective_from}?`,
-        )
-    ) {
+function selectPreset(value: number) {
+    form.sla_percentage = value;
+}
+
+async function submit() {
+    form.clearErrors();
+
+    if (!form.pelanggan_id) {
+        form.setError('pelanggan_id', 'Pilih pelanggan terlebih dahulu.');
         return;
     }
 
-    form.post('/sla-rules/bulk-sites');
+    if (form.online_billing_ids.length === 0) {
+        form.setError(
+            'online_billing_ids',
+            'Pilih minimal satu site yang akan diatur.',
+        );
+        return;
+    }
+
+    if (
+        !Number.isFinite(Number(form.sla_percentage)) ||
+        Number(form.sla_percentage) < 0 ||
+        Number(form.sla_percentage) > 100
+    ) {
+        form.setError(
+            'sla_percentage',
+            'Target SLA harus berada antara 0 sampai 100.',
+        );
+        return;
+    }
+
+    const totalSites = form.online_billing_ids.length;
+
+    // Konfirmasi menggunakan SweetAlert2.
+    const confirmed = await confirmAction({
+        title: 'Terapkan Target SLA?',
+        text:
+            `Target SLA ${form.sla_percentage}% akan diterapkan ke ` +
+            `${totalSites} site milik ${selectedCustomerName.value}. ` +
+            'Target aktif yang sudah ada akan diperbarui.',
+        confirmButtonText: 'Ya, terapkan',
+        cancelButtonText: 'Batal',
+    });
+
+    // Hentikan proses jika pengguna membatalkan.
+    if (!confirmed) {
+        return;
+    }
+
+    form.post('/sla-rules/bulk-sites', {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            form.online_billing_ids = [];
+
+            showSuccessToast(
+                `Target SLA berhasil diterapkan ke ${totalSites} site.`,
+            );
+        },
+
+        onError: () => {
+            showErrorToast(
+                'Target SLA gagal disimpan. Periksa kembali data yang dimasukkan.',
+            );
+        },
+    });
+}
+
+function goToPage(url: string | null) {
+    if (!url) return;
+
+    router.visit(url, {
+        preserveState: true,
+        preserveScroll: true,
+    });
+}
+
+function paginationLabel(label: string) {
+    const decoded = label
+        .replace(/&laquo;/g, '«')
+        .replace(/&raquo;/g, '»')
+        .replace(/&amp;/g, '&');
+
+    if (/previous/i.test(decoded)) {
+        return 'Sebelumnya';
+    }
+
+    if (/next/i.test(decoded)) {
+        return 'Berikutnya';
+    }
+
+    return decoded;
+}
+
+function formatPercent(value: number | string | null | undefined) {
+    if (value === null || value === undefined || value === '') {
+        return '—';
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) return '—';
+
+    return `${new Intl.NumberFormat('id-ID', {
+        maximumFractionDigits: 2,
+    }).format(number)}%`;
+}
+
+function activeRuleCount(site: Site) {
+    return Number(site.active_sla_rule_count ?? 0);
+}
+
+function ruleStatusLabel(site: Site) {
+    const count = activeRuleCount(site);
+
+    if (count > 1) {
+        return `Duplikat: ${count} target aktif`;
+    }
+
+    if (count === 1) {
+        return `Target aktif: ${formatPercent(site.active_sla_percentage)}`;
+    }
+
+    return 'Belum ada target aktif';
+}
+
+function ruleStatusClass(site: Site) {
+    const count = activeRuleCount(site);
+
+    if (count > 1) {
+        return 'border-destructive/30 bg-destructive/10 text-destructive';
+    }
+
+    if (count === 1) {
+        return 'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300';
+    }
+
+    return 'border-border bg-muted text-muted-foreground';
 }
 </script>
 
 <template>
-    <Head title="Terapkan Target SLA ke Banyak Site" />
+    <Head title="Atur Target SLA Banyak Site" />
 
-    <div class="space-y-6 p-4 md:p-6">
+    <div class="space-y-6 p-4 text-foreground sm:p-6 lg:p-8">
+        <!-- Header -->
         <div
-            class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"
+            class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"
         >
             <div>
-                <h1 class="text-2xl font-semibold tracking-tight">
-                    Terapkan Target SLA ke Banyak Site
+                <h1
+                    class="text-2xl font-semibold tracking-tight text-foreground"
+                >
+                    Atur Target SLA Banyak Site
                 </h1>
-                <p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-                    Pilih satu pelanggan, tentukan target dan tanggal mulai
-                    berlaku, lalu terapkan target yang sama ke beberapa site
-                    sekaligus.
+
+                <p
+                    class="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground"
+                >
+                    Pilih pelanggan, tentukan target SLA, lalu pilih site yang
+                    akan diperbarui. Daftar site dimuat per halaman agar tetap
+                    ringan meskipun jumlah site banyak.
                 </p>
             </div>
 
             <Link
                 href="/sla-rules"
-                class="inline-flex w-fit items-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
+                class="inline-flex shrink-0 items-center justify-center rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
             >
-                Kembali ke Pengaturan SLA
+                Kembali ke Target SLA
             </Link>
         </div>
 
-        <form class="space-y-6" @submit.prevent="submit">
-            <section class="space-y-4 rounded-xl border bg-card p-4 md:p-6">
-                <div>
-                    <h2 class="font-semibold">1. Pilih pelanggan dan site</h2>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        Site yang ditampilkan berasal dari pelanggan yang
-                        dipilih.
-                    </p>
-                </div>
+        <!-- Pengaturan -->
+        <section
+            class="rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm"
+        >
+            <div class="mb-5">
+                <h2 class="text-lg font-semibold text-foreground">
+                    Pengaturan Target
+                </h2>
 
-                <div class="grid gap-4 md:grid-cols-2">
-                    <div class="space-y-2">
-                        <label for="pelanggan_id" class="text-sm font-medium"
-                            >Pelanggan</label
-                        >
-                        <select
-                            id="pelanggan_id"
-                            v-model="form.pelanggan_id"
-                            required
-                            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                            @change="changeCustomer"
-                        >
-                            <option value="">Pilih pelanggan</option>
-                            <option
-                                v-for="customer in customers"
-                                :key="customer.id"
-                                :value="String(customer.id)"
-                            >
-                                {{ customer.nama_pelanggan }}
-                            </option>
-                        </select>
-                        <p
-                            v-if="form.errors.pelanggan_id"
-                            class="text-sm text-red-600"
-                        >
-                            {{ form.errors.pelanggan_id }}
-                        </p>
-                    </div>
-
-                    <div class="space-y-2">
-                        <label for="site_search" class="text-sm font-medium"
-                            >Cari site</label
-                        >
-                        <input
-                            id="site_search"
-                            v-model="search"
-                            type="search"
-                            :disabled="!form.pelanggan_id"
-                            placeholder="Nama site atau nomor jaringan"
-                            class="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-50"
-                        />
-                    </div>
-                </div>
-
-                <div class="overflow-hidden rounded-lg border">
-                    <div
-                        class="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3"
-                    >
-                        <label
-                            class="flex cursor-pointer items-center gap-2 text-sm font-medium"
-                        >
-                            <input
-                                type="checkbox"
-                                :checked="allVisibleSelected"
-                                :disabled="visibleSites.length === 0"
-                                class="size-4 rounded border"
-                                @change="toggleVisibleSites"
-                            />
-                            Pilih semua hasil yang tampil
-                        </label>
-                        <span class="text-sm text-muted-foreground">
-                            {{ form.online_billing_ids.length }} site dipilih
-                            <span v-if="form.pelanggan_id"
-                                >· {{ visibleSites.length }} site tampil</span
-                            >
-                        </span>
-                    </div>
-
-                    <div
-                        v-if="!form.pelanggan_id"
-                        class="px-4 py-10 text-center text-sm text-muted-foreground"
-                    >
-                        Pilih pelanggan untuk melihat daftar site.
-                    </div>
-                    <div
-                        v-else-if="visibleSites.length === 0"
-                        class="px-4 py-10 text-center text-sm text-muted-foreground"
-                    >
-                        Tidak ada site yang cocok dengan pencarian.
-                    </div>
-                    <div v-else class="max-h-[420px] divide-y overflow-y-auto">
-                        <label
-                            v-for="site in visibleSites"
-                            :key="site.id"
-                            class="flex cursor-pointer items-start gap-3 px-4 py-3 hover:bg-muted/30"
-                        >
-                            <input
-                                v-model="form.online_billing_ids"
-                                type="checkbox"
-                                :value="site.id"
-                                class="mt-1 size-4 rounded border"
-                            />
-                            <span class="min-w-0 flex-1">
-                                <span class="block text-sm font-medium">{{
-                                    site.nama_site
-                                }}</span>
-                                <span
-                                    class="mt-0.5 block text-xs text-muted-foreground"
-                                >
-                                    No. jaringan:
-                                    {{ site.no_jaringan || '—' }} · ID
-                                    {{ site.id }}
-                                </span>
-                            </span>
-                        </label>
-                    </div>
-                </div>
-                <p
-                    v-if="form.errors.online_billing_ids"
-                    class="text-sm text-red-600"
-                >
-                    {{ form.errors.online_billing_ids }}
+                <p class="mt-1 text-sm text-muted-foreground">
+                    Pilih pelanggan terlebih dahulu agar daftar site dapat
+                    ditampilkan.
                 </p>
-            </section>
+            </div>
 
-            <section class="space-y-4 rounded-xl border bg-card p-4 md:p-6">
+            <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+                <!-- Pelanggan -->
                 <div>
-                    <h2 class="font-semibold">2. Tentukan target SLA</h2>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        Pilih nilai umum atau masukkan target sendiri. Nilai ini
-                        hanya diterapkan ke site terpilih; target SLA Global
-                        tidak berubah.
+                    <label
+                        for="pelanggan_id"
+                        class="mb-1.5 block text-sm font-medium text-foreground"
+                    >
+                        Pelanggan
+                    </label>
+
+                    <select
+                        id="pelanggan_id"
+                        v-model="form.pelanggan_id"
+                        required
+                        class="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                        @change="changeCustomer"
+                    >
+                        <option value="" disabled>Pilih pelanggan</option>
+
+                        <option
+                            v-for="customer in props.customers"
+                            :key="customer.id"
+                            :value="String(customer.id)"
+                        >
+                            {{ customer.nama_pelanggan }}
+                        </option>
+                    </select>
+
+                    <p
+                        v-if="form.errors.pelanggan_id"
+                        class="mt-1 text-sm text-destructive"
+                    >
+                        {{ form.errors.pelanggan_id }}
                     </p>
                 </div>
 
-                <div class="flex flex-wrap gap-2">
-                    <button
-                        v-for="preset in presets"
-                        :key="preset.value"
-                        type="button"
-                        class="rounded-md border px-4 py-2 text-sm font-medium transition hover:bg-muted"
-                        :class="
-                            form.sla_percentage === preset.value
-                                ? 'border-primary bg-primary/10 text-primary'
-                                : ''
-                        "
-                        @click="form.sla_percentage = preset.value"
+                <!-- Target -->
+                <div>
+                    <label
+                        for="sla_percentage"
+                        class="mb-1.5 block text-sm font-medium text-foreground"
                     >
-                        {{ preset.label }}
-                    </button>
-                </div>
+                        Target SLA (%)
+                    </label>
 
-                <div class="max-w-sm space-y-2">
-                    <label for="sla_percentage" class="text-sm font-medium"
-                        >Target SLA (%)</label
-                    >
                     <div class="relative">
                         <input
                             id="sla_percentage"
                             v-model.number="form.sla_percentage"
                             type="number"
-                            min="0.0001"
+                            min="0"
                             max="100"
-                            step="0.0001"
+                            step="0.01"
                             required
-                            class="w-full rounded-md border bg-background px-3 py-2 pr-10 text-sm"
+                            class="w-full rounded-lg border border-input bg-background px-3 py-2.5 pr-10 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
                         />
+
                         <span
-                            class="absolute top-1/2 right-3 -translate-y-1/2 text-sm text-muted-foreground"
-                            >%</span
+                            class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground"
                         >
+                            %
+                        </span>
                     </div>
+
                     <p
                         v-if="form.errors.sla_percentage"
-                        class="text-sm text-red-600"
+                        class="mt-1 text-sm text-destructive"
                     >
                         {{ form.errors.sla_percentage }}
                     </p>
-                    <p class="text-xs text-muted-foreground">
-                        Rentang yang diizinkan: lebih dari 0% hingga 100%.
-                    </p>
-                </div>
-            </section>
 
-            <section class="space-y-4 rounded-xl border bg-card p-4 md:p-6">
-                <div>
-                    <h2 class="font-semibold">3. Tanggal mulai berlaku</h2>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        Target akan berlaku mulai tanggal ini dan berlanjut
-                        sampai ada aturan berikutnya. Aturan site sebelumnya
-                        yang masih berlaku akan diakhiri sehari sebelum tanggal
-                        ini.
-                    </p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <button
+                            v-for="preset in presets"
+                            :key="preset"
+                            type="button"
+                            class="rounded-full border px-3 py-1.5 text-xs font-medium transition"
+                            :class="
+                                Number(form.sla_percentage) === preset
+                                    ? 'border-primary bg-primary/10 text-primary'
+                                    : 'border-border bg-background text-foreground hover:bg-accent'
+                            "
+                            @click="selectPreset(preset)"
+                        >
+                            {{ preset }}%
+                        </button>
+                    </div>
                 </div>
-
-                <div class="max-w-sm space-y-2">
-                    <label for="effective_from" class="text-sm font-medium"
-                        >Berlaku mulai</label
-                    >
-                    <input
-                        id="effective_from"
-                        v-model="form.effective_from"
-                        type="date"
-                        required
-                        class="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                    />
-                    <p
-                        v-if="form.errors.effective_from"
-                        class="text-sm text-red-600"
-                    >
-                        {{ form.errors.effective_from }}
-                    </p>
-                </div>
-
-                <div
-                    class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200"
-                >
-                    Sistem tidak akan menghapus histori aturan SLA. Jika site
-                    yang dipilih sudah memiliki aturan terjadwal mulai pada atau
-                    setelah tanggal ini, proses akan ditolak agar jadwal
-                    tersebut tidak tertimpa.
-                </div>
-            </section>
+            </div>
 
             <div
-                class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+                class="mt-5 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm leading-6 text-foreground"
+            >
+                <p class="font-medium">Cara kerja target SLA</p>
+
+                <p class="mt-1 text-muted-foreground">
+                    Site yang belum memiliki target aktif akan mendapatkan
+                    target baru. Site yang sudah memiliki target aktif akan
+                    diperbarui menggunakan nilai yang dipilih di atas.
+                </p>
+            </div>
+        </section>
+
+        <!-- Daftar site -->
+        <section
+            class="overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm"
+        >
+            <div class="flex flex-col gap-4 border-b border-border p-5">
+                <div
+                    class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                    <div>
+                        <h2 class="text-lg font-semibold text-foreground">
+                            Pilih Site
+                        </h2>
+
+                        <p class="mt-1 text-sm text-muted-foreground">
+                            <template v-if="form.pelanggan_id">
+                                {{ props.sites.total }} site ditemukan untuk
+                                pelanggan ini.
+                            </template>
+
+                            <template v-else>
+                                Pilih pelanggan untuk menampilkan daftar site.
+                            </template>
+                        </p>
+                    </div>
+
+                    <div
+                        v-if="form.pelanggan_id"
+                        class="rounded-lg bg-primary/10 px-3 py-2 text-sm text-primary"
+                    >
+                        Dipilih:
+                        <span class="font-semibold">
+                            {{ form.online_billing_ids.length }}
+                        </span>
+                        site
+                    </div>
+                </div>
+
+                <!-- Pencarian -->
+                <form
+                    class="flex flex-col gap-2 sm:flex-row"
+                    @submit.prevent="applySearch"
+                >
+                    <input
+                        v-model="search"
+                        type="search"
+                        :disabled="!form.pelanggan_id"
+                        placeholder="Cari nama site atau nomor jaringan..."
+                        class="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-70"
+                    />
+
+                    <div class="flex gap-2">
+                        <button
+                            type="submit"
+                            :disabled="!form.pelanggan_id"
+                            class="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Cari Site
+                        </button>
+
+                        <button
+                            type="button"
+                            :disabled="!form.pelanggan_id"
+                            class="rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                            @click="clearSearch"
+                        >
+                            Reset
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Pilih semua pada halaman saat ini -->
+                <div
+                    v-if="form.pelanggan_id && visibleSites.length > 0"
+                    class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                    <label
+                        class="inline-flex cursor-pointer items-center gap-2 text-sm text-foreground"
+                    >
+                        <input
+                            type="checkbox"
+                            :checked="allVisibleSelected"
+                            class="h-4 w-4 rounded border-input accent-primary focus-visible:ring-2 focus-visible:ring-ring/30"
+                            @change="toggleVisibleSites"
+                        />
+
+                        Pilih semua site di halaman ini
+                    </label>
+
+                    <p class="text-xs text-muted-foreground">
+                        {{ selectedVisibleCount }} dari
+                        {{ visibleSites.length }} site di halaman ini dipilih.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Belum pilih pelanggan -->
+            <div v-if="!form.pelanggan_id" class="px-5 py-14 text-center">
+                <div
+                    class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        class="h-6 w-6"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.7"
+                    >
+                        <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9v.01M9 12v.01M9 15v.01M9 18v.01M14 9v.01M14 12v.01M14 15v.01M14 18v.01"
+                        />
+                    </svg>
+                </div>
+
+                <h3 class="mt-3 font-medium text-foreground">
+                    Pelanggan belum dipilih
+                </h3>
+
+                <p class="mt-1 text-sm text-muted-foreground">
+                    Pilih pelanggan di atas untuk melihat site yang tersedia.
+                </p>
+            </div>
+
+            <!-- Tidak ada hasil -->
+            <div
+                v-else-if="visibleSites.length === 0"
+                class="px-5 py-14 text-center"
+            >
+                <h3 class="font-medium text-foreground">
+                    Site tidak ditemukan
+                </h3>
+
+                <p class="mt-1 text-sm text-muted-foreground">
+                    Tidak ada site yang cocok dengan pencarian saat ini. Coba
+                    kata kunci lain.
+                </p>
+            </div>
+
+            <!-- Daftar site -->
+            <div v-else class="divide-y divide-border">
+                <label
+                    v-for="site in visibleSites"
+                    :key="site.id"
+                    class="flex cursor-pointer gap-3 px-5 py-4 transition-colors hover:bg-muted/40"
+                >
+                    <div class="pt-1">
+                        <input
+                            type="checkbox"
+                            :checked="form.online_billing_ids.includes(site.id)"
+                            class="h-4 w-4 rounded border-input accent-primary focus-visible:ring-2 focus-visible:ring-ring/30"
+                            @change="toggleSite(site.id)"
+                        />
+                    </div>
+
+                    <div class="min-w-0 flex-1">
+                        <div
+                            class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between"
+                        >
+                            <div class="min-w-0">
+                                <p
+                                    class="text-sm font-medium break-words text-foreground"
+                                >
+                                    {{ site.nama_site }}
+                                </p>
+
+                                <p class="mt-1 text-xs text-muted-foreground">
+                                    No. Jaringan:
+                                    <span class="font-medium text-foreground">
+                                        {{
+                                            site.no_jaringan || 'Belum tersedia'
+                                        }}
+                                    </span>
+                                </p>
+
+                                <p
+                                    class="mt-1 text-xs text-muted-foreground/80"
+                                >
+                                    Site ID: {{ site.id }}
+                                </p>
+                            </div>
+
+                            <span
+                                class="inline-flex w-fit max-w-full items-center rounded-full border px-2.5 py-1 text-xs font-medium"
+                                :class="ruleStatusClass(site)"
+                            >
+                                {{ ruleStatusLabel(site) }}
+                            </span>
+                        </div>
+
+                        <p
+                            v-if="activeRuleCount(site) > 1"
+                            class="mt-2 text-xs leading-5 text-destructive"
+                        >
+                            Site ini memiliki lebih dari satu target aktif.
+                            Periksa data duplikat sebelum melanjutkan.
+                        </p>
+                    </div>
+                </label>
+            </div>
+
+            <!-- Validasi -->
+            <div
+                v-if="form.errors.online_billing_ids"
+                class="border-t border-destructive/20 bg-destructive/10 px-5 py-3 text-sm text-destructive"
+            >
+                {{ form.errors.online_billing_ids }}
+            </div>
+
+            <!-- Pagination -->
+            <div
+                v-if="form.pelanggan_id && props.sites.total > 0"
+                class="flex flex-col gap-3 border-t border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
             >
                 <p class="text-sm text-muted-foreground">
-                    {{ form.online_billing_ids.length }} site akan menerima
-                    target {{ String(form.sla_percentage).replace('.', ',') }}%.
+                    Menampilkan
+                    <span class="font-medium text-foreground">
+                        {{ props.sites.from ?? 0 }}–{{ props.sites.to ?? 0 }}
+                    </span>
+                    dari
+                    <span class="font-medium text-foreground">
+                        {{ props.sites.total }}
+                    </span>
+                    site
                 </p>
+
+                <div class="flex flex-wrap items-center gap-1">
+                    <button
+                        v-for="(link, index) in props.sites.links"
+                        :key="`${index}-${link.label}`"
+                        type="button"
+                        :disabled="!link.url || link.active"
+                        class="min-w-9 rounded-lg border px-3 py-2 text-sm transition disabled:cursor-not-allowed"
+                        :class="
+                            link.active
+                                ? 'border-primary bg-primary font-semibold text-primary-foreground'
+                                : link.url
+                                  ? 'border-border bg-background text-foreground hover:bg-accent'
+                                  : 'border-border bg-muted text-muted-foreground opacity-60'
+                        "
+                        @click="goToPage(link.url)"
+                    >
+                        {{ paginationLabel(link.label) }}
+                    </button>
+                </div>
+            </div>
+
+            <!-- Terapkan target -->
+            <div
+                class="flex flex-col gap-3 border-t border-border bg-muted/30 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+                <div class="text-sm text-muted-foreground">
+                    <template v-if="form.online_billing_ids.length > 0">
+                        Target
+                        <span class="font-semibold text-foreground">
+                            {{ formatPercent(form.sla_percentage) }}
+                        </span>
+                        akan diterapkan kepada
+                        <span class="font-semibold text-foreground">
+                            {{ form.online_billing_ids.length }} site
+                        </span>
+                        yang dipilih.
+                    </template>
+
+                    <template v-else> Belum ada site yang dipilih. </template>
+                </div>
+
                 <button
-                    type="submit"
+                    type="button"
                     :disabled="
                         form.processing ||
                         !form.pelanggan_id ||
-                        form.online_billing_ids.length === 0 ||
-                        !form.effective_from ||
-                        Number(form.sla_percentage) <= 0 ||
-                        Number(form.sla_percentage) > 100
+                        form.online_billing_ids.length === 0
                     "
-                    class="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                    @click="submit"
                 >
                     {{
                         form.processing
                             ? 'Menyimpan...'
-                            : 'Terapkan Target ke Site Terpilih'
+                            : `Terapkan ke ${form.online_billing_ids.length} Site`
                     }}
                 </button>
             </div>
-        </form>
+        </section>
     </div>
 </template>

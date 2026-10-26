@@ -6,18 +6,26 @@ use App\Models\OnlineBilling;
 use App\Models\Pelanggan;
 use App\Models\SlaRule;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
-use Illuminate\Http\RedirectResponse;
-use Carbon\CarbonImmutable;
-use Illuminate\Support\Facades\DB;
 
 class SlaRuleController extends Controller
 {
-    public function index(): Response
+    /**
+     * Halaman Pengaturan Target SLA.
+     * Hanya menampilkan aturan yang dianggap aktif.
+     */
+    public function index(Request $request): Response
     {
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $search = trim($validated['search'] ?? '');
+
         $customers = Pelanggan::query()
             ->orderBy('nama_pelanggan')
             ->get([
@@ -39,58 +47,145 @@ class SlaRuleController extends Controller
                 'pelanggan:id,nama_pelanggan',
                 'onlineBilling:id,pelanggan_id,nama_site,no_jaringan',
             ])
-            ->orderByDesc('effective_from')
-            ->orderByDesc('id')
-            ->get();
+            ->whereNull('effective_until')
+            ->when($search !== '', function ($query) use ($search) {
+                $keyword = '%' . $search . '%';
 
+                $query->where(function ($query) use ($keyword) {
+                    $query
+                        ->whereHas('pelanggan', function ($customer) use ($keyword) {
+                            $customer->where(
+                                'nama_pelanggan',
+                                'like',
+                                $keyword
+                            );
+                        })
+                        ->orWhereHas('onlineBilling', function ($site) use ($keyword) {
+                            $site
+                                ->where('nama_site', 'like', $keyword)
+                                ->orWhere('no_jaringan', 'like', $keyword);
+                        })
+                        ->orWhere('sla_percentage', 'like', $keyword)
+                        ->orWhere('scope', 'like', $keyword);
+                });
+            })
+            // Data terakhir dibuat atau diperbarui tampil paling atas.
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
+            ->paginate(10)
+            ->withQueryString();
         return Inertia::render('Sla/Rules/Index', [
             'customers' => $customers,
             'sites' => $sites,
             'rules' => $rules,
-            'today' => now()->toDateString(),
+            'filters' => [
+                'search' => $search,
+            ],
             'success' => session('success'),
         ]);
     }
-
+    /**
+     * Simpan target SLA Global atau Site.
+     * Jika target aktif sudah ada, perbarui target tersebut.
+     */
     public function store(Request $request): RedirectResponse
     {
-        $data = $this->validateRule($request);
+        $data = $this->validatePermanentRule($request);
 
-        SlaRule::create($data);
+        DB::transaction(function () use ($data) {
+            $this->savePermanentRule(
+                pelangganId: $data['pelanggan_id'],
+                scope: $data['scope'],
+                onlineBillingId: $data['online_billing_id'],
+                percentage: $data['sla_percentage'],
+            );
+        });
 
         return redirect()
             ->route('sla-rules.index')
-            ->with('success', 'Aturan SLA berhasil ditambahkan.');
+            ->with(
+                'success',
+                'Target SLA berhasil disimpan dan berlaku sampai diperbarui.'
+            );
     }
 
+    /**
+     * Perbarui aturan SLA yang dipilih.
+     */
     public function update(
         Request $request,
         SlaRule $slaRule
     ): RedirectResponse {
-        $data = $this->validateRule(
-            $request,
-            $slaRule->id
-        );
+        // Aturan lama yang sudah ditutup tidak boleh diedit
+        // melalui halaman target aktif.
+        if ($slaRule->effective_until !== null) {
+            throw ValidationException::withMessages([
+                'sla_percentage' =>
+                'Aturan ini sudah tidak aktif. Pilih target aktif untuk melakukan perubahan.',
+            ]);
+        }
 
-        $slaRule->update($data);
+        $data = $this->validatePermanentRule($request);
+
+        DB::transaction(function () use ($slaRule, $data) {
+            // Cegah dua target aktif dengan kombinasi pelanggan,
+            // scope, dan site yang sama.
+            $this->ensureNoOtherActiveRule(
+                data: $data,
+                exceptId: $slaRule->id,
+            );
+
+            $slaRule->pelanggan_id = $data['pelanggan_id'];
+            $slaRule->scope = $data['scope'];
+            $slaRule->online_billing_id =
+                $data['online_billing_id'];
+            $slaRule->sla_percentage =
+                $data['sla_percentage'];
+
+            // Tanggal ini hanya nilai internal untuk skema lama.
+            // Resolver SLA tidak lagi menggunakan tanggal ini.
+            $slaRule->effective_from = now()->toDateString();
+            $slaRule->effective_until = null;
+
+            $slaRule->save();
+        });
 
         return redirect()
             ->route('sla-rules.index')
-            ->with('success', 'Aturan SLA berhasil diperbarui.');
+            ->with(
+                'success',
+                'Target SLA berhasil diperbarui.'
+            );
     }
 
-    public function destroy(SlaRule $slaRule): RedirectResponse
-    {
+    /**
+     * Hapus target SLA aktif.
+     */
+    public function destroy(
+        SlaRule $slaRule
+    ): RedirectResponse {
+        if ($slaRule->effective_until !== null) {
+            throw ValidationException::withMessages([
+                'sla_rule' =>
+                'Aturan ini sudah tidak aktif.',
+            ]);
+        }
+
         $slaRule->delete();
 
         return redirect()
             ->route('sla-rules.index')
-            ->with('success', 'Aturan SLA berhasil dihapus.');
+            ->with(
+                'success',
+                'Target SLA berhasil dihapus.'
+            );
     }
 
-    private function validateRule(
-        Request $request,
-        ?int $exceptId = null
+    /**
+     * Validasi data target SLA tanpa tanggal berlaku.
+     */
+    private function validatePermanentRule(
+        Request $request
     ): array {
         $data = $request->validate([
             'pelanggan_id' => [
@@ -101,16 +196,14 @@ class SlaRuleController extends Controller
 
             'scope' => [
                 'required',
-                Rule::in(['global', 'site']),
+                'in:global,site',
             ],
 
             'online_billing_id' => [
-                Rule::requiredIf(
-                    $request->input('scope') === 'site'
-                ),
                 'nullable',
                 'integer',
                 'exists:online_billings,id',
+                'required_if:scope,site',
             ],
 
             'sla_percentage' => [
@@ -119,23 +212,22 @@ class SlaRuleController extends Controller
                 'gt:0',
                 'lte:100',
             ],
-
-            'effective_from' => [
-                'required',
-                'date',
-            ],
-
-            'effective_until' => [
-                'nullable',
-                'date',
-                'after_or_equal:effective_from',
-            ],
         ]);
 
+        $data['pelanggan_id'] = (int) $data['pelanggan_id'];
+        $data['sla_percentage'] =
+            (float) $data['sla_percentage'];
+
         if ($data['scope'] === 'site') {
+            $onlineBillingId =
+                (int) $data['online_billing_id'];
+
             $siteBelongsToCustomer = OnlineBilling::query()
-                ->whereKey($data['online_billing_id'])
-                ->where('pelanggan_id', $data['pelanggan_id'])
+                ->whereKey($onlineBillingId)
+                ->where(
+                    'pelanggan_id',
+                    $data['pelanggan_id']
+                )
                 ->exists();
 
             if (!$siteBelongsToCustomer) {
@@ -144,23 +236,28 @@ class SlaRuleController extends Controller
                     'Site yang dipilih bukan milik pelanggan tersebut.',
                 ]);
             }
+
+            $data['online_billing_id'] = $onlineBillingId;
         } else {
             // Aturan Global tidak terkait dengan satu site.
             $data['online_billing_id'] = null;
         }
 
-        $this->ensureNoOverlappingRule($data, $exceptId);
-
         return $data;
     }
 
-    private function ensureNoOverlappingRule(
+    /**
+     * Periksa apakah sudah ada target aktif lain untuk
+     * kombinasi pelanggan, scope, dan site yang sama.
+     */
+    private function ensureNoOtherActiveRule(
         array $data,
         ?int $exceptId = null
     ): void {
         $query = SlaRule::query()
             ->where('pelanggan_id', $data['pelanggan_id'])
-            ->where('scope', $data['scope']);
+            ->where('scope', $data['scope'])
+            ->whereNull('effective_until');
 
         if ($data['scope'] === 'global') {
             $query->whereNull('online_billing_id');
@@ -175,61 +272,133 @@ class SlaRuleController extends Controller
             $query->where('id', '<>', $exceptId);
         }
 
-        // Jika tanggal akhir diisi, aturan lama harus dimulai
-        // sebelum atau pada tanggal akhir aturan baru.
-        if (!empty($data['effective_until'])) {
-            $query->whereDate(
-                'effective_from',
-                '<=',
-                $data['effective_until']
-            );
-        }
-
-        // Aturan lama harus belum berakhir atau berakhir
-        // pada atau setelah tanggal mulai aturan baru.
-        $query->where(function ($q) use ($data) {
-            $q->whereNull('effective_until')
-                ->orWhereDate(
-                    'effective_until',
-                    '>=',
-                    $data['effective_from']
-                );
-        });
-
         if ($query->exists()) {
+            $field = $data['scope'] === 'site'
+                ? 'online_billing_id'
+                : 'scope';
+
             throw ValidationException::withMessages([
-                'effective_from' =>
-                'Periode aturan SLA bertumpang tindih dengan aturan '
-                    . 'lain untuk pelanggan dan cakupan yang sama.',
+                $field =>
+                'Target aktif untuk pelanggan dan cakupan ini sudah ada. ' .
+                    'Silakan edit target yang sudah terdaftar.',
             ]);
         }
     }
 
-    public function bulkSites()
+    /**
+     * Halaman penerapan target ke banyak site.
+     */
+    public function bulkSites(Request $request): Response
     {
+        $validated = $request->validate([
+            'pelanggan_id' => [
+                'nullable',
+                'integer',
+                'exists:pelanggans,id',
+            ],
+            'search' => [
+                'nullable',
+                'string',
+                'max:100',
+            ],
+        ]);
+
+        $pelangganId = !empty($validated['pelanggan_id'])
+            ? (int) $validated['pelanggan_id']
+            : null;
+
+        $search = trim($validated['search'] ?? '');
+
         $customers = Pelanggan::query()
             ->orderBy('nama_pelanggan')
-            ->get(['id', 'nama_pelanggan']);
-
-        $sites = OnlineBilling::query()
-            ->where('status', 'active')
-            ->orderBy('nama_site')
             ->get([
                 'id',
-                'pelanggan_id',
-                'nama_site',
-                'no_jaringan',
+                'nama_pelanggan',
             ]);
+
+        $sitesQuery = OnlineBilling::query()
+            ->where('status', 'active');
+
+        // Pilih pelanggan terlebih dahulu sebelum memuat daftar site.
+        if ($pelangganId !== null) {
+            $sitesQuery->where('pelanggan_id', $pelangganId);
+        } else {
+            $sitesQuery->whereRaw('1 = 0');
+        }
+
+        // Pencarian dilakukan di database, bukan di seluruh data browser.
+        if ($search !== '') {
+            $keyword = '%' . $search . '%';
+
+            $sitesQuery->where(function ($query) use ($keyword) {
+                $query
+                    ->where('nama_site', 'like', $keyword)
+                    ->orWhere('no_jaringan', 'like', $keyword);
+            });
+        }
+
+        // Target aktif untuk setiap site.
+        $activeTargetQuery = SlaRule::query()
+            ->select('sla_percentage')
+            ->whereColumn(
+                'sla_rules.pelanggan_id',
+                'online_billings.pelanggan_id'
+            )
+            ->whereColumn(
+                'sla_rules.online_billing_id',
+                'online_billings.id'
+            )
+            ->where('sla_rules.scope', 'site')
+            ->whereNull('sla_rules.effective_until')
+            ->orderByDesc('sla_rules.id')
+            ->limit(1);
+
+        // Jumlah aturan aktif agar duplikasi bisa diketahui dari UI.
+        $activeRuleCountQuery = SlaRule::query()
+            ->selectRaw('COUNT(*)')
+            ->whereColumn(
+                'sla_rules.pelanggan_id',
+                'online_billings.pelanggan_id'
+            )
+            ->whereColumn(
+                'sla_rules.online_billing_id',
+                'online_billings.id'
+            )
+            ->where('sla_rules.scope', 'site')
+            ->whereNull('sla_rules.effective_until');
+
+        $sites = $sitesQuery
+            ->select([
+                'online_billings.id',
+                'online_billings.pelanggan_id',
+                'online_billings.nama_site',
+                'online_billings.no_jaringan',
+            ])
+            ->addSelect([
+                'active_sla_percentage' => $activeTargetQuery,
+                'active_sla_rule_count' => $activeRuleCountQuery,
+            ])
+            ->orderBy('online_billings.nama_site')
+            ->orderBy('online_billings.id')
+            ->paginate(10)
+            ->withQueryString();
 
         return Inertia::render('Sla/Rules/BulkSites', [
             'customers' => $customers,
             'sites' => $sites,
-            'today' => now()->toDateString(),
+            'filters' => [
+                'pelanggan_id' => $pelangganId,
+                'search' => $search,
+            ],
         ]);
     }
 
-    public function storeBulkSites(Request $request)
-    {
+    /**
+     * Terapkan target SLA ke banyak site sekaligus.
+     */
+    public function storeBulkSites(
+        Request $request
+    ): RedirectResponse {
         $validated = $request->validate([
             'pelanggan_id' => [
                 'required',
@@ -247,7 +416,6 @@ class SlaRuleController extends Controller
                 'required',
                 'integer',
                 'distinct',
-                'exists:online_billings,id',
             ],
 
             'sla_percentage' => [
@@ -256,144 +424,43 @@ class SlaRuleController extends Controller
                 'gt:0',
                 'lte:100',
             ],
-
-            'effective_from' => [
-                'required',
-                'date_format:Y-m-d',
-            ],
         ]);
 
         $pelangganId = (int) $validated['pelanggan_id'];
 
-        $siteIds = collect($validated['online_billing_ids'])
-            ->map(fn($id) => (int) $id)
-            ->values();
+        $siteIds = array_map(
+            'intval',
+            $validated['online_billing_ids']
+        );
 
-        // Pastikan seluruh site aktif dan milik pelanggan yang dipilih.
+        $percentage = (float) $validated['sla_percentage'];
+
+        // Pastikan site yang dipilih aktif dan milik pelanggan tersebut.
         $sites = OnlineBilling::query()
-            ->where('pelanggan_id', $pelangganId)
             ->where('status', 'active')
+            ->where('pelanggan_id', $pelangganId)
             ->whereIn('id', $siteIds)
-            ->orderBy('id')
-            ->get(['id', 'nama_site']);
+            ->get(['id']);
 
-        if ($sites->count() !== $siteIds->count()) {
+        if ($sites->count() !== count($siteIds)) {
             throw ValidationException::withMessages([
                 'online_billing_ids' =>
-                'Pastikan semua site yang dipilih aktif dan milik pelanggan yang sama.',
+                'Ada site yang tidak aktif, tidak ditemukan, atau bukan milik pelanggan tersebut.',
             ]);
         }
-
-        $effectiveFrom = CarbonImmutable::parse(
-            $validated['effective_from']
-        )->startOfDay();
 
         DB::transaction(function () use (
             $pelangganId,
             $sites,
-            $siteIds,
-            $effectiveFrom,
-            $validated
+            $percentage
         ) {
-            // Periksa seluruh jadwal sebelum mengubah aturan mana pun.
-            $existingRules = SlaRule::query()
-                ->where('pelanggan_id', $pelangganId)
-                ->where('scope', 'site')
-                ->whereIn('online_billing_id', $siteIds)
-                ->orderBy('effective_from')
-                ->get();
-
             foreach ($sites as $site) {
-                $siteRules = $existingRules->where(
-                    'online_billing_id',
-                    $site->id
+                $this->savePermanentRule(
+                    pelangganId: $pelangganId,
+                    scope: 'site',
+                    onlineBillingId: (int) $site->id,
+                    percentage: $percentage,
                 );
-
-                // Jadwal yang dimulai pada atau setelah tanggal baru
-                // tidak ditimpa otomatis.
-                $futureRule = $siteRules->first(
-                    fn($rule) => CarbonImmutable::parse(
-                        $rule->effective_from
-                    )->startOfDay()->greaterThanOrEqualTo($effectiveFrom)
-                );
-
-                if ($futureRule) {
-                    throw ValidationException::withMessages([
-                        'effective_from' =>
-                        "Site {$site->nama_site} sudah memiliki aturan "
-                            . 'yang mulai pada atau setelah tanggal tersebut. '
-                            . 'Periksa jadwal aturan SLA site itu terlebih dahulu.',
-                    ]);
-                }
-
-                // Aturan sebelum tanggal baru yang masih mencakup tanggal
-                // baru akan diakhiri sehari sebelumnya.
-                $overlappingRules = $siteRules->filter(
-                    function ($rule) use ($effectiveFrom) {
-                        $ruleStart = CarbonImmutable::parse(
-                            $rule->effective_from
-                        )->startOfDay();
-
-                        $ruleEnd = $rule->effective_until !== null
-                            ? CarbonImmutable::parse(
-                                $rule->effective_until
-                            )->endOfDay()
-                            : null;
-
-                        return $ruleStart->lessThan($effectiveFrom)
-                            && (
-                                $ruleEnd === null
-                                || $ruleEnd->greaterThanOrEqualTo($effectiveFrom)
-                            );
-                    }
-                );
-
-                if ($overlappingRules->count() > 1) {
-                    throw ValidationException::withMessages([
-                        'effective_from' =>
-                        "Jadwal aturan SLA untuk site {$site->nama_site} "
-                            . 'saling tumpang tindih. Periksa aturan yang sudah ada.',
-                    ]);
-                }
-            }
-
-            foreach ($sites as $site) {
-                $currentRule = SlaRule::query()
-                    ->where('pelanggan_id', $pelangganId)
-                    ->where('scope', 'site')
-                    ->where('online_billing_id', $site->id)
-                    ->whereDate(
-                        'effective_from',
-                        '<',
-                        $effectiveFrom->toDateString()
-                    )
-                    ->where(function ($query) use ($effectiveFrom) {
-                        $query->whereNull('effective_until')
-                            ->orWhereDate(
-                                'effective_until',
-                                '>=',
-                                $effectiveFrom->toDateString()
-                            );
-                    })
-                    ->orderByDesc('effective_from')
-                    ->first();
-
-                if ($currentRule) {
-                    $currentRule->update([
-                        'effective_until' => $effectiveFrom
-                            ->subDay()
-                            ->toDateString(),
-                    ]);
-                }
-
-                SlaRule::create([
-                    'pelanggan_id' => $pelangganId,
-                    'scope' => 'site',
-                    'online_billing_id' => $site->id,
-                    'sla_percentage' => $validated['sla_percentage'],
-                    'effective_from' => $effectiveFrom->toDateString(),
-                    'effective_until' => null,
-                ]);
             }
         });
 
@@ -401,8 +468,73 @@ class SlaRuleController extends Controller
             ->route('sla-rules.index')
             ->with(
                 'success',
-                "Target SLA {$validated['sla_percentage']}% berhasil diterapkan "
-                    . "ke {$sites->count()} site."
+                'Target SLA berhasil diterapkan ke ' .
+                    $sites->count() . ' site.'
             );
+    }
+
+    /**
+     * Membuat atau memperbarui satu target permanen.
+     *
+     * effective_until = null digunakan sebagai penanda internal
+     * bahwa aturan tersebut adalah target aktif.
+     */
+    private function savePermanentRule(
+        int $pelangganId,
+        string $scope,
+        ?int $onlineBillingId,
+        float $percentage
+    ): SlaRule {
+        $query = SlaRule::query()
+            ->where('pelanggan_id', $pelangganId)
+            ->where('scope', $scope);
+
+        if ($scope === 'global') {
+            $query->whereNull('online_billing_id');
+        } else {
+            $query->where(
+                'online_billing_id',
+                $onlineBillingId
+            );
+        }
+
+        // Ambil aturan aktif dan kunci selama transaksi.
+        $activeRules = (clone $query)
+            ->whereNull('effective_until')
+            ->orderByDesc('id')
+            ->lockForUpdate()
+            ->get();
+
+        // Jangan memilih secara sembarang bila database
+        // sudah memiliki lebih dari satu target aktif.
+        if ($activeRules->count() > 1) {
+            throw ValidationException::withMessages([
+                'sla_percentage' =>
+                'Ditemukan lebih dari satu target SLA aktif untuk ' .
+                    'kombinasi pelanggan dan cakupan ini. Periksa dan ' .
+                    'rapikan data aturan SLA yang duplikat terlebih dahulu.',
+            ]);
+        }
+
+        $rule = $activeRules->first();
+
+        if (!$rule) {
+            $rule = new SlaRule();
+
+            $rule->pelanggan_id = $pelangganId;
+            $rule->scope = $scope;
+            $rule->online_billing_id = $onlineBillingId;
+        }
+
+        $rule->sla_percentage = $percentage;
+
+        // Nilai internal untuk kompatibilitas dengan skema database lama.
+        // Nilai effective_from tidak digunakan untuk menentukan target laporan.
+        $rule->effective_from = now()->toDateString();
+        $rule->effective_until = null;
+
+        $rule->save();
+
+        return $rule;
     }
 }

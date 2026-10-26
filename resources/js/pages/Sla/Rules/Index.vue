@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { useForm, router, Link } from '@inertiajs/vue3';
-
+import { computed, ref, watch } from 'vue';
+import { Head, Link, router, useForm } from '@inertiajs/vue3';
+import {
+    confirmAction,
+    showSuccessToast,
+    showErrorToast,
+} from '@/lib/sla-notifications';
 interface Customer {
     id: number;
     nama_pelanggan: string;
@@ -19,36 +23,90 @@ interface SlaRuleRow {
     pelanggan_id: number;
     scope: 'global' | 'site';
     online_billing_id: number | null;
-    sla_percentage: string | number;
+    sla_percentage: number | string;
     effective_from: string;
     effective_until: string | null;
-    pelanggan?: Customer;
+    pelanggan?: Customer | null;
     online_billing?: Site | null;
+}
+
+interface PaginationLink {
+    url: string | null;
+    label: string;
+    active: boolean;
+}
+
+interface Paginated<T> {
+    data: T[];
+    links: PaginationLink[];
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+    from: number | null;
+    to: number | null;
 }
 
 const props = defineProps<{
     customers: Customer[];
     sites: Site[];
-    rules: SlaRuleRow[];
-    today: string;
-    success: string | null;
+    rules: Paginated<SlaRuleRow>;
+    filters: {
+        search?: string;
+    };
+    success?: string | null;
 }>();
 
 const editingId = ref<number | null>(null);
+const search = ref(props.filters?.search ?? '');
 
 const form = useForm({
     pelanggan_id: '',
     scope: 'global' as 'global' | 'site',
     online_billing_id: '',
     sla_percentage: '99.5',
-    effective_from: props.today,
-    effective_until: '',
 });
 
-const filteredSites = computed(() =>
-    props.sites.filter(
+const isEditing = computed(() => editingId.value !== null);
+
+const filteredSites = computed(() => {
+    if (!form.pelanggan_id) {
+        return [];
+    }
+
+    return props.sites.filter(
         (site) => String(site.pelanggan_id) === form.pelanggan_id,
-    ),
+    );
+});
+
+// Error validasi umum jika controller menggunakan key "rule".
+const ruleError = computed(() => {
+    const errors = form.errors as unknown as Record<string, string | undefined>;
+
+    return errors.rule ?? '';
+});
+
+watch(
+    () => form.pelanggan_id,
+    () => {
+        form.online_billing_id = '';
+    },
+);
+
+watch(
+    () => form.scope,
+    (scope) => {
+        if (scope === 'global') {
+            form.online_billing_id = '';
+        }
+    },
+);
+
+watch(
+    () => props.filters?.search,
+    (value) => {
+        search.value = value ?? '';
+    },
 );
 
 function resetForm() {
@@ -57,133 +115,249 @@ function resetForm() {
     form.clearErrors();
 }
 
-function submitForm() {
+async function submitForm() {
     form.clearErrors();
+
+    const isEditing = editingId.value !== null;
+
+    // Tampilkan dialog konfirmasi sebelum mengirim form.
+    const confirmed = await confirmAction({
+        title: isEditing ? 'Perbarui Target SLA?' : 'Simpan Target SLA?',
+        text: isEditing
+            ? 'Target SLA akan diperbarui menggunakan nilai yang baru.'
+            : 'Target SLA baru akan disimpan sesuai pelanggan dan cakupan yang dipilih.',
+        confirmButtonText: isEditing ? 'Ya, perbarui' : 'Ya, simpan',
+        cancelButtonText: 'Batal',
+    });
+
+    // Berhenti jika pengguna membatalkan.
+    if (!confirmed) {
+        return;
+    }
 
     const options = {
         preserveScroll: true,
-        onSuccess: () => resetForm(),
+
+        onSuccess: () => {
+            resetForm();
+
+            showSuccessToast(
+                isEditing
+                    ? 'Target SLA berhasil diperbarui.'
+                    : 'Target SLA berhasil ditambahkan.',
+            );
+        },
+
+        onError: () => {
+            showErrorToast(
+                'Target SLA gagal disimpan. Periksa kembali data yang dimasukkan.',
+            );
+        },
     };
 
-    if (editingId.value !== null) {
+    if (isEditing) {
         form.put(`/sla-rules/${editingId.value}`, options);
-    } else {
-        form.post('/sla-rules', options);
+        return;
     }
-}
 
+    form.post('/sla-rules', options);
+}
 function editRule(rule: SlaRuleRow) {
     editingId.value = rule.id;
-
     form.clearErrors();
 
     form.pelanggan_id = String(rule.pelanggan_id);
     form.scope = rule.scope;
-    form.online_billing_id = rule.online_billing_id
-        ? String(rule.online_billing_id)
-        : '';
+    form.online_billing_id =
+        rule.online_billing_id !== null ? String(rule.online_billing_id) : '';
     form.sla_percentage = String(rule.sla_percentage);
-    form.effective_from = dateOnly(rule.effective_from);
-    form.effective_until = dateOnly(rule.effective_until);
 }
 
-function deleteRule(rule: SlaRuleRow) {
-    const confirmed = window.confirm(
-        `Hapus aturan SLA ${rule.scope === 'global' ? 'Global' : 'Site'} ` +
-            `untuk ${rule.pelanggan?.nama_pelanggan ?? 'pelanggan ini'}? ` +
-            'Penghapusan dapat memengaruhi perhitungan laporan historis.',
-    );
+async function deleteRule(rule: SlaRuleRow) {
+    const customerName = rule.pelanggan?.nama_pelanggan ?? 'pelanggan ini';
+
+    const confirmed = await confirmAction({
+        title: 'Hapus Target SLA?',
+        text: `Target SLA aktif untuk ${customerName} akan dihapus. Tindakan ini tidak dapat dibatalkan.`,
+        confirmButtonText: 'Ya, hapus',
+        cancelButtonText: 'Batal',
+    });
 
     if (!confirmed) return;
 
     router.delete(`/sla-rules/${rule.id}`, {
         preserveScroll: true,
+
+        onSuccess: () => {
+            showSuccessToast('Target SLA berhasil dihapus.');
+        },
+
+        onError: () => {
+            showErrorToast('Target SLA gagal dihapus.');
+        },
     });
 }
 
-function dateOnly(value: string | null): string {
-    return value ? value.substring(0, 10) : '';
+function applySearch() {
+    router.get(
+        '/sla-rules',
+        { search: search.value.trim() || undefined },
+        {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true,
+        },
+    );
 }
 
-function formatPercent(value: string | number): string {
-    return `${Number(value).toLocaleString('id-ID', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 4,
-    })}%`;
+function clearSearch() {
+    search.value = '';
+
+    router.get(
+        '/sla-rules',
+        {},
+        {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true,
+        },
+    );
 }
 
-function scopeLabel(scope: string): string {
-    return scope === 'global' ? 'Global' : 'Per Site';
+function goToPage(url: string | null) {
+    if (!url) return;
+
+    router.visit(url, {
+        preserveState: true,
+        preserveScroll: true,
+    });
+}
+
+function paginationLabel(label: string) {
+    const decoded = label
+        .replace(/&laquo;/g, '«')
+        .replace(/&raquo;/g, '»')
+        .replace(/&amp;/g, '&');
+
+    if (/previous/i.test(decoded)) {
+        return 'Sebelumnya';
+    }
+
+    if (/next/i.test(decoded)) {
+        return 'Berikutnya';
+    }
+
+    return decoded;
+}
+
+function formatPercent(value: number | string | null | undefined) {
+    if (value === null || value === undefined || value === '') {
+        return '—';
+    }
+
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) return '—';
+
+    return `${new Intl.NumberFormat('id-ID', {
+        maximumFractionDigits: 2,
+    }).format(number)}%`;
+}
+
+function scopeLabel(scope: 'global' | 'site') {
+    return scope === 'global' ? 'Global Pelanggan' : 'Per Site';
+}
+
+function siteName(rule: SlaRuleRow) {
+    if (rule.scope === 'global') {
+        return 'Semua site pelanggan';
+    }
+
+    return (
+        rule.online_billing?.nama_site ??
+        `Site ID: ${rule.online_billing_id ?? '—'}`
+    );
 }
 </script>
 
 <template>
-    <div class="space-y-6 p-4 md:p-6">
-        <div>
-            <h1 class="text-2xl font-bold tracking-tight">
-                Pengaturan Target SLA
-            </h1>
+    <Head title="Pengaturan Target SLA" />
 
-            <p class="mt-1 text-sm text-muted-foreground">
-                Kelola target SLA Global dan per Site beserta periode
-                berlakunya.
-            </p>
-        </div>
-
+    <div class="space-y-6 p-4 text-foreground sm:p-6 lg:p-8">
+        <!-- Header -->
         <div
-            v-if="props.success"
-            class="rounded-lg border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-800 dark:bg-green-950 dark:text-green-200"
+            class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
         >
-            {{ props.success }}
+            <div>
+                <h1
+                    class="text-2xl font-semibold tracking-tight text-foreground"
+                >
+                    Pengaturan Target SLA
+                </h1>
+
+                <p class="mt-1 text-sm text-muted-foreground">
+                    Kelola target SLA aktif untuk pelanggan atau site. Target
+                    berlaku sampai diperbarui oleh admin.
+                </p>
+            </div>
+
+            <Link
+                href="/sla-rules/bulk-sites"
+                class="inline-flex items-center justify-center rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition hover:bg-accent hover:text-accent-foreground"
+            >
+                Atur Banyak Site
+            </Link>
         </div>
 
-        <section class="rounded-xl border bg-card p-5 shadow-sm">
-            <div class="flex flex-wrap items-start justify-between gap-3">
+        <!-- Form tambah/edit -->
+        <section
+            class="rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm"
+        >
+            <div
+                class="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+            >
                 <div>
-                    <h2 class="text-lg font-semibold">
+                    <h2 class="text-lg font-semibold text-foreground">
                         {{
-                            editingId ? 'Edit Aturan SLA' : 'Tambah Aturan SLA'
+                            isEditing ? 'Edit Target SLA' : 'Tambah Target SLA'
                         }}
                     </h2>
 
                     <p class="mt-1 text-sm text-muted-foreground">
-                        Aturan Global tidak terikat pada satu site. Aturan Site
-                        hanya berlaku untuk site yang dipilih.
+                        {{
+                            isEditing
+                                ? 'Perbarui nilai target SLA yang aktif.'
+                                : 'Buat atau atur target SLA aktif untuk cakupan yang dipilih.'
+                        }}
                     </p>
-                    <Link
-                        href="/sla-rules/bulk-sites"
-                        class="inline-flex items-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
-                    >
-                        Terapkan Target ke Banyak Site
-                    </Link>
                 </div>
 
                 <button
-                    v-if="editingId"
+                    v-if="isEditing"
                     type="button"
-                    class="rounded-md border px-3 py-2 text-sm hover:bg-muted"
+                    class="self-start rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground hover:bg-accent sm:self-auto"
                     @click="resetForm"
                 >
-                    Batal edit
+                    Batal Edit
                 </button>
             </div>
 
-            <form class="mt-5 space-y-5" @submit.prevent="submitForm">
-                <div class="grid gap-5 md:grid-cols-2">
+            <form class="space-y-5" @submit.prevent="submitForm">
+                <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+                    <!-- Pelanggan -->
                     <div>
                         <label
-                            for="customer"
-                            class="mb-2 block text-sm font-medium"
+                            for="pelanggan_id"
+                            class="mb-1.5 block text-sm font-medium text-foreground"
                         >
                             Pelanggan
                         </label>
 
                         <select
-                            id="customer"
+                            id="pelanggan_id"
                             v-model="form.pelanggan_id"
                             required
-                            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                            @change="form.online_billing_id = ''"
+                            class="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
                         >
                             <option value="" disabled>Pilih pelanggan</option>
 
@@ -198,54 +372,62 @@ function scopeLabel(scope: string): string {
 
                         <p
                             v-if="form.errors.pelanggan_id"
-                            class="mt-1 text-sm text-red-600"
+                            class="mt-1 text-sm text-destructive"
                         >
                             {{ form.errors.pelanggan_id }}
                         </p>
                     </div>
 
+                    <!-- Cakupan -->
                     <div>
                         <label
                             for="scope"
-                            class="mb-2 block text-sm font-medium"
+                            class="mb-1.5 block text-sm font-medium text-foreground"
                         >
-                            Cakupan SLA
+                            Cakupan Target
                         </label>
 
                         <select
                             id="scope"
                             v-model="form.scope"
                             required
-                            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                            @change="form.online_billing_id = ''"
+                            class="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
                         >
-                            <option value="global">SLA Global</option>
-                            <option value="site">SLA per Site</option>
+                            <option value="global">Global Pelanggan</option>
+                            <option value="site">Per Site</option>
                         </select>
 
                         <p
                             v-if="form.errors.scope"
-                            class="mt-1 text-sm text-red-600"
+                            class="mt-1 text-sm text-destructive"
                         >
                             {{ form.errors.scope }}
                         </p>
                     </div>
 
+                    <!-- Site -->
                     <div v-if="form.scope === 'site'" class="md:col-span-2">
                         <label
-                            for="site"
-                            class="mb-2 block text-sm font-medium"
+                            for="online_billing_id"
+                            class="mb-1.5 block text-sm font-medium text-foreground"
                         >
                             Site
                         </label>
 
                         <select
-                            id="site"
+                            id="online_billing_id"
                             v-model="form.online_billing_id"
                             required
-                            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                            :disabled="!form.pelanggan_id"
+                            class="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-70"
                         >
-                            <option value="" disabled>Pilih site</option>
+                            <option value="" disabled>
+                                {{
+                                    form.pelanggan_id
+                                        ? 'Pilih site'
+                                        : 'Pilih pelanggan terlebih dahulu'
+                                }}
+                            </option>
 
                             <option
                                 v-for="site in filteredSites"
@@ -253,14 +435,15 @@ function scopeLabel(scope: string): string {
                                 :value="String(site.id)"
                             >
                                 {{ site.nama_site }}
-                                —
-                                {{ site.no_jaringan || 'Tanpa nomor jaringan' }}
+                                <template v-if="site.no_jaringan">
+                                    — {{ site.no_jaringan }}
+                                </template>
                             </option>
                         </select>
 
                         <p
                             v-if="form.errors.online_billing_id"
-                            class="mt-1 text-sm text-red-600"
+                            class="mt-1 text-sm text-destructive"
                         >
                             {{ form.errors.online_billing_id }}
                         </p>
@@ -269,175 +452,221 @@ function scopeLabel(scope: string): string {
                             v-if="
                                 form.pelanggan_id && filteredSites.length === 0
                             "
-                            class="mt-1 text-sm text-amber-600"
+                            class="mt-1 text-sm text-amber-700 dark:text-amber-300"
                         >
-                            Tidak ada site milik pelanggan ini.
+                            Tidak ada site yang tersedia untuk pelanggan ini.
                         </p>
                     </div>
 
-                    <div>
+                    <!-- Target SLA -->
+                    <div :class="form.scope === 'site' ? 'md:col-span-2' : ''">
                         <label
-                            for="target"
-                            class="mb-2 block text-sm font-medium"
+                            for="sla_percentage"
+                            class="mb-1.5 block text-sm font-medium text-foreground"
                         >
                             Target SLA (%)
                         </label>
 
-                        <input
-                            id="target"
-                            v-model="form.sla_percentage"
-                            type="number"
-                            min="0.0001"
-                            max="100"
-                            step="0.0001"
-                            required
-                            placeholder="Contoh: 99.5"
-                            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                        />
+                        <div class="relative">
+                            <input
+                                id="sla_percentage"
+                                v-model="form.sla_percentage"
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.01"
+                                required
+                                placeholder="Contoh: 99.5"
+                                class="w-full rounded-lg border border-input bg-background px-3 py-2.5 pr-10 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
+                            />
+
+                            <span
+                                class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground"
+                            >
+                                %
+                            </span>
+                        </div>
 
                         <p
                             v-if="form.errors.sla_percentage"
-                            class="mt-1 text-sm text-red-600"
+                            class="mt-1 text-sm text-destructive"
                         >
                             {{ form.errors.sla_percentage }}
                         </p>
-                    </div>
-
-                    <div>
-                        <label
-                            for="effective_from"
-                            class="mb-2 block text-sm font-medium"
-                        >
-                            Berlaku mulai
-                        </label>
-
-                        <input
-                            id="effective_from"
-                            v-model="form.effective_from"
-                            type="date"
-                            required
-                            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                        />
 
                         <p
-                            v-if="form.errors.effective_from"
-                            class="mt-1 text-sm text-red-600"
+                            v-if="ruleError"
+                            class="mt-1 text-sm text-destructive"
                         >
-                            {{ form.errors.effective_from }}
-                        </p>
-                    </div>
-
-                    <div>
-                        <label
-                            for="effective_until"
-                            class="mb-2 block text-sm font-medium"
-                        >
-                            Berlaku sampai
-                        </label>
-
-                        <input
-                            id="effective_until"
-                            v-model="form.effective_until"
-                            type="date"
-                            :min="form.effective_from"
-                            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                        />
-
-                        <p class="mt-1 text-xs text-muted-foreground">
-                            Kosongkan jika belum ditentukan tanggal akhirnya.
+                            {{ ruleError }}
                         </p>
 
-                        <p
-                            v-if="form.errors.effective_until"
-                            class="mt-1 text-sm text-red-600"
-                        >
-                            {{ form.errors.effective_until }}
+                        <p class="mt-1.5 text-xs text-muted-foreground">
+                            Target aktif akan berlaku sampai admin
+                            memperbaruinya.
                         </p>
                     </div>
                 </div>
 
-                <button
-                    type="submit"
-                    :disabled="form.processing"
-                    class="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                <div
+                    class="flex flex-col-reverse gap-3 border-t border-border pt-4 sm:flex-row sm:justify-end"
                 >
-                    {{
-                        form.processing
-                            ? 'Menyimpan...'
-                            : editingId
-                              ? 'Simpan Perubahan'
-                              : 'Simpan Aturan SLA'
-                    }}
-                </button>
+                    <button
+                        v-if="isEditing"
+                        type="button"
+                        class="rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent"
+                        @click="resetForm"
+                    >
+                        Batal
+                    </button>
+
+                    <button
+                        type="submit"
+                        :disabled="form.processing"
+                        class="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {{
+                            form.processing
+                                ? 'Menyimpan...'
+                                : isEditing
+                                  ? 'Simpan Perubahan'
+                                  : 'Simpan Target SLA'
+                        }}
+                    </button>
+                </div>
             </form>
         </section>
 
-        <section class="overflow-hidden rounded-xl border bg-card">
-            <div class="border-b p-5">
-                <h2 class="text-lg font-semibold">Daftar Aturan SLA</h2>
+        <!-- Daftar target aktif -->
+        <section
+            class="overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-sm"
+        >
+            <div
+                class="flex flex-col gap-4 border-b border-border p-5 lg:flex-row lg:items-center lg:justify-between"
+            >
+                <div>
+                    <h2 class="text-lg font-semibold text-foreground">
+                        Target SLA Aktif
+                    </h2>
 
-                <p class="mt-1 text-sm text-muted-foreground">
-                    {{ props.rules.length }} aturan terdaftar.
-                </p>
+                    <p class="mt-1 text-sm text-muted-foreground">
+                        {{ props.rules.total }} target aktif ditemukan.
+                    </p>
+                </div>
+
+                <form
+                    class="flex w-full flex-col gap-2 sm:flex-row lg:max-w-xl"
+                    @submit.prevent="applySearch"
+                >
+                    <input
+                        v-model="search"
+                        type="search"
+                        placeholder="Cari pelanggan, site, jaringan, target..."
+                        class="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
+                    />
+
+                    <div class="flex gap-2">
+                        <button
+                            type="submit"
+                            class="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        >
+                            Cari
+                        </button>
+
+                        <button
+                            type="button"
+                            class="rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground hover:bg-accent"
+                            @click="clearSearch"
+                        >
+                            Reset
+                        </button>
+                    </div>
+                </form>
             </div>
 
             <div class="overflow-x-auto">
-                <table class="w-full text-left text-sm">
+                <table
+                    class="w-full min-w-[760px] divide-y divide-border text-sm"
+                >
                     <thead class="bg-muted/50">
                         <tr>
-                            <th class="px-4 py-3">Pelanggan</th>
-                            <th class="px-4 py-3">Cakupan</th>
-                            <th class="px-4 py-3">Site</th>
-                            <th class="px-4 py-3">Target</th>
-                            <th class="px-4 py-3">Mulai</th>
-                            <th class="px-4 py-3">Sampai</th>
-                            <th class="px-4 py-3">Aksi</th>
+                            <th
+                                class="px-5 py-3 text-left font-semibold text-muted-foreground"
+                            >
+                                Pelanggan
+                            </th>
+                            <th
+                                class="px-5 py-3 text-left font-semibold text-muted-foreground"
+                            >
+                                Cakupan
+                            </th>
+                            <th
+                                class="px-5 py-3 text-left font-semibold text-muted-foreground"
+                            >
+                                Site
+                            </th>
+                            <th
+                                class="px-5 py-3 text-left font-semibold text-muted-foreground"
+                            >
+                                Target SLA
+                            </th>
+                            <th
+                                class="px-5 py-3 text-right font-semibold text-muted-foreground"
+                            >
+                                Aksi
+                            </th>
                         </tr>
                     </thead>
 
-                    <tbody>
+                    <tbody class="divide-y divide-border">
                         <tr
-                            v-for="rule in props.rules"
+                            v-for="rule in props.rules.data"
                             :key="rule.id"
-                            class="border-t"
+                            class="transition-colors hover:bg-muted/40"
                         >
-                            <td class="px-4 py-3">
-                                {{ rule.pelanggan?.nama_pelanggan ?? '-' }}
-                            </td>
-
-                            <td class="px-4 py-3">
-                                {{ scopeLabel(rule.scope) }}
-                            </td>
-
-                            <td class="px-4 py-3">
+                            <td class="px-5 py-4 font-medium text-foreground">
                                 {{
-                                    rule.scope === 'global'
-                                        ? 'Semua site'
-                                        : (rule.online_billing?.nama_site ??
-                                          '-')
+                                    rule.pelanggan?.nama_pelanggan ??
+                                    `Pelanggan ID: ${rule.pelanggan_id}`
                                 }}
                             </td>
 
-                            <td class="px-4 py-3 font-semibold">
+                            <td class="px-5 py-4">
+                                <span
+                                    class="inline-flex rounded-full px-2.5 py-1 text-xs font-medium"
+                                    :class="
+                                        rule.scope === 'global'
+                                            ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+                                            : 'bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300'
+                                    "
+                                >
+                                    {{ scopeLabel(rule.scope) }}
+                                </span>
+                            </td>
+
+                            <td class="px-5 py-4 text-muted-foreground">
+                                {{ siteName(rule) }}
+
+                                <div
+                                    v-if="
+                                        rule.scope === 'site' &&
+                                        rule.online_billing?.no_jaringan
+                                    "
+                                    class="mt-1 text-xs text-muted-foreground/80"
+                                >
+                                    {{ rule.online_billing.no_jaringan }}
+                                </div>
+                            </td>
+
+                            <td class="px-5 py-4 font-semibold text-foreground">
                                 {{ formatPercent(rule.sla_percentage) }}
                             </td>
 
-                            <td class="px-4 py-3 whitespace-nowrap">
-                                {{ dateOnly(rule.effective_from) }}
-                            </td>
-
-                            <td class="px-4 py-3 whitespace-nowrap">
-                                {{
-                                    dateOnly(rule.effective_until) ||
-                                    'Tidak dibatasi'
-                                }}
-                            </td>
-
-                            <td class="px-4 py-3 whitespace-nowrap">
-                                <div class="flex gap-2">
+                            <td class="px-5 py-4">
+                                <div class="flex justify-end gap-2">
                                     <button
                                         type="button"
-                                        class="rounded-md border px-3 py-1.5 hover:bg-muted"
+                                        class="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent"
                                         @click="editRule(rule)"
                                     >
                                         Edit
@@ -445,7 +674,7 @@ function scopeLabel(scope: string): string {
 
                                     <button
                                         type="button"
-                                        class="rounded-md border border-red-300 px-3 py-1.5 text-red-600 hover:bg-red-50"
+                                        class="rounded-lg border border-destructive/30 bg-background px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10"
                                         @click="deleteRule(rule)"
                                     >
                                         Hapus
@@ -454,17 +683,56 @@ function scopeLabel(scope: string): string {
                             </td>
                         </tr>
 
-                        <tr v-if="props.rules.length === 0">
-                            <td
-                                colspan="7"
-                                class="px-4 py-10 text-center text-muted-foreground"
-                            >
-                                Belum ada aturan SLA. Tambahkan aturan pertama
-                                melalui formulir di atas.
+                        <tr v-if="props.rules.data.length === 0">
+                            <td colspan="5" class="px-5 py-12 text-center">
+                                <p class="font-medium text-foreground">
+                                    Target SLA tidak ditemukan.
+                                </p>
+                                <p class="mt-1 text-sm text-muted-foreground">
+                                    Coba ubah kata pencarian atau tambahkan
+                                    target SLA baru.
+                                </p>
                             </td>
                         </tr>
                     </tbody>
                 </table>
+            </div>
+
+            <!-- Pagination -->
+            <div
+                class="flex flex-col gap-3 border-t border-border px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+                <p class="text-sm text-muted-foreground">
+                    Menampilkan
+                    <span class="font-medium text-foreground">
+                        {{ props.rules.from ?? 0 }}–{{ props.rules.to ?? 0 }}
+                    </span>
+                    dari
+                    <span class="font-medium text-foreground">
+                        {{ props.rules.total }}
+                    </span>
+                    target
+                </p>
+
+                <div class="flex flex-wrap items-center gap-1">
+                    <button
+                        v-for="(link, index) in props.rules.links"
+                        :key="`${index}-${link.label}`"
+                        type="button"
+                        :disabled="!link.url || link.active"
+                        class="min-w-9 rounded-lg border px-3 py-2 text-sm transition disabled:cursor-not-allowed"
+                        :class="
+                            link.active
+                                ? 'border-primary bg-primary font-semibold text-primary-foreground'
+                                : link.url
+                                  ? 'border-border bg-background text-foreground hover:bg-accent'
+                                  : 'border-border bg-muted text-muted-foreground opacity-60'
+                        "
+                        @click="goToPage(link.url)"
+                    >
+                        {{ paginationLabel(link.label) }}
+                    </button>
+                </div>
             </div>
         </section>
     </div>

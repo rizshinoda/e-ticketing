@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue';
 import { router, usePage } from '@inertiajs/vue3';
-
+import {
+    confirmAction,
+    showSuccessToast,
+    showErrorToast,
+} from '@/lib/sla-notifications';
 interface Customer {
     id: number;
     nama_pelanggan: string;
@@ -27,7 +31,11 @@ interface SlaResult {
     site_count?: number;
     is_sla_met?: boolean | null;
     report_status?:
-        'provisional' | 'missing_sla_rule' | 'ready_to_finalize' | string;
+        | 'provisional'
+        | 'missing_sla_rule'
+        | 'ready_to_finalize'
+        | 'no_service_period'
+        | string;
     pending_incidents_count?: number;
     pending_site_incidents_count?: number;
     sites?: SlaResult[];
@@ -213,12 +221,16 @@ function submitReport() {
     );
 }
 
-function finalizeReport() {
-    const confirmed = window.confirm(
-        `Finalisasi laporan SLA ${reportPeriodLabel.value}? ` +
+async function finalizeReport() {
+    const confirmed = await confirmAction({
+        title: 'Finalisasi Laporan SLA?',
+        text:
+            `Finalisasi laporan SLA ${reportPeriodLabel.value}? ` +
             'Hasil saat ini akan disimpan sebagai snapshot resmi dan tidak ' +
             'akan diperbarui otomatis.',
-    );
+        confirmButtonText: 'Ya, finalisasi',
+        cancelButtonText: 'Batal',
+    });
 
     if (!confirmed) return;
 
@@ -234,6 +246,18 @@ function finalizeReport() {
         },
         {
             preserveScroll: true,
+
+            onSuccess: () => {
+                showSuccessToast(
+                    `Laporan SLA ${reportPeriodLabel.value} berhasil difinalisasi.`,
+                );
+            },
+
+            onError: () => {
+                showErrorToast(
+                    'Finalisasi laporan gagal. Periksa kembali data laporan.',
+                );
+            },
         },
     );
 }
@@ -296,13 +320,6 @@ function formatDateTime(value: string): string {
                 Hitung, tinjau, dan finalisasi pencapaian SLA berdasarkan
                 periode bulanan.
             </p>
-        </div>
-
-        <div
-            v-if="success"
-            class="rounded-lg border border-green-300 bg-green-50 p-4 text-green-800 dark:bg-green-950 dark:text-green-200"
-        >
-            {{ success }}
         </div>
 
         <div
@@ -519,6 +536,21 @@ function formatDateTime(value: string): string {
                         insiden-site downtime yang belum selesai dan berpotensi
                         memengaruhi hasil periode ini. Laporan perlu ditinjau
                         kembali setelah insiden selesai.
+                    </p>
+                </div>
+                <div
+                    v-else-if="reportStatus === 'no_service_period'"
+                    class="rounded-xl border bg-muted/30 p-5"
+                >
+                    <h3 class="font-semibold">
+                        Site Belum Beroperasi pada Periode Ini
+                    </h3>
+
+                    <p class="mt-2 text-sm text-muted-foreground">
+                        Tanggal mulai layanan Online Billing berada pada atau
+                        setelah akhir periode laporan. Tidak ada waktu layanan
+                        yang dapat dihitung untuk periode ini. Laporan tidak
+                        dapat difinalisasi.
                     </p>
                 </div>
                 <div

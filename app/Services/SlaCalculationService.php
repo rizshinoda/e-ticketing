@@ -24,21 +24,72 @@ class SlaCalculationService
         CarbonInterface $periodStart,
         CarbonInterface $periodEnd,
     ): array {
-        [$start, $end, $periodSeconds] =
-            $this->normalizePeriod($periodStart, $periodEnd);
+        // Periode laporan bulanan, dengan akhir periode eksklusif.
+        [$reportStart, $end] = $this->normalizePeriod(
+            $periodStart,
+            $periodEnd
+        );
 
+        // Pastikan site benar-benar milik pelanggan yang dipilih.
         $site = OnlineBilling::query()
             ->where('pelanggan_id', $pelangganId)
             ->findOrFail($onlineBillingId);
 
-        $rule = $this->resolveRuleForPeriod(
+        // Tanggal mulai layanan harus tersedia agar durasi dapat dihitung.
+        if (!$site->tanggal_mulai) {
+            throw new LogicException(
+                "Site {$site->nama_site} belum memiliki tanggal mulai layanan."
+            );
+        }
+
+        // Awal waktu layanan tidak boleh mendahului tanggal mulai layanan.
+        $serviceStart = CarbonImmutable::parse(
+            $site->tanggal_mulai
+        )->startOfDay();
+
+        $start = $reportStart;
+
+        if ($serviceStart->greaterThan($start)) {
+            $start = $serviceStart;
+        }
+
+        // Jika layanan belum dimulai pada periode laporan,
+        // tidak ada waktu layanan yang dapat dinilai.
+        if (!$end->greaterThan($start)) {
+            return [
+                'scope' => 'site',
+                'pelanggan_id' => $pelangganId,
+                'online_billing_id' => $site->id,
+                'site_name' => $site->nama_site ?? null,
+
+                'period_start' => $reportStart->toIso8601String(),
+                'period_end' => $end->toIso8601String(),
+
+                'sla_rule_id' => null,
+                'target_sla_percentage' => null,
+                'availability_percentage' => null,
+
+                'downtime_seconds' => 0,
+                'total_service_seconds' => 0,
+
+                'is_sla_met' => null,
+                'pending_incidents_count' => 0,
+                'report_status' => 'no_service_period',
+            ];
+        }
+
+        // Hitung durasi layanan aktual setelah tanggal mulai.
+        $periodSeconds = $end->getTimestamp()
+            - $start->getTimestamp();
+
+        // Cari aturan SLA yang berlaku selama waktu layanan ini.
+        $rule = $this->resolveActiveRule(
             pelangganId: $pelangganId,
             scope: 'site',
             onlineBillingId: $onlineBillingId,
-            start: $start,
-            end: $end,
         );
 
+        // Hitung downtime pada periode layanan yang sudah disesuaikan.
         $downtimeSeconds = $this->calculateSiteDowntimeSeconds(
             onlineBillingId: $onlineBillingId,
             start: $start,
@@ -54,10 +105,11 @@ class SlaCalculationService
             ? (float) $rule->sla_percentage
             : null;
 
+        // Periksa insiden downtime yang masih pending.
         $pendingIncidentsCount = $this->countUnresolvedDowntimeIncidents(
             $onlineBillingId,
             $start,
-            $end
+            $end,
         );
 
         $reportStatus = $pendingIncidentsCount > 0
@@ -67,33 +119,29 @@ class SlaCalculationService
                 ? 'missing_sla_rule'
                 : 'ready_to_finalize'
             );
+
         return [
             'scope' => 'site',
-
             'pelanggan_id' => $pelangganId,
-
             'online_billing_id' => $site->id,
-
             'site_name' => $site->nama_site ?? null,
 
+            // Periode ini menunjukkan jendela layanan yang benar-benar dihitung.
             'period_start' => $start->toIso8601String(),
-
             'period_end' => $end->toIso8601String(),
 
             'sla_rule_id' => $rule?->id,
-
             'target_sla_percentage' => $target,
-
             'availability_percentage' => $availability,
 
             'downtime_seconds' => $downtimeSeconds,
-
             'total_service_seconds' => $periodSeconds,
 
             'is_sla_met' => $this->isSlaMet(
                 $availability,
                 $target,
             ),
+
             'pending_incidents_count' => $pendingIncidentsCount,
             'report_status' => $reportStatus,
         ];
@@ -119,12 +167,10 @@ class SlaCalculationService
         /*
      * Target SLA Global harus mencakup seluruh periode laporan.
      */
-        $rule = $this->resolveRuleForPeriod(
+        $rule = $this->resolveActiveRule(
             pelangganId: $pelangganId,
             scope: 'global',
             onlineBillingId: null,
-            start: $start,
-            end: $end,
         );
 
         /*
@@ -563,85 +609,65 @@ class SlaCalculationService
      * Jika periode melintasi pergantian aturan,
      * laporan harus dibagi menjadi beberapa periode.
      */
-    private function resolveRuleForPeriod(
+    /**
+     * Ambil aturan SLA aktif tanpa membatasi periode laporan.
+     *
+     * effective_until yang bernilai null digunakan sebagai
+     * penanda internal bahwa aturan tersebut adalah aturan aktif.
+     *
+     * Nilai effective_from tidak digunakan untuk menentukan
+     * apakah aturan berlaku pada bulan laporan.
+     */
+    /**
+     * Ambil satu target SLA aktif tanpa membatasi periode laporan.
+     *
+     * effective_until = null menandakan aturan aktif.
+     * effective_from tidak digunakan untuk menentukan target
+     * yang dipakai dalam laporan bulanan.
+     */
+    private function resolveActiveRule(
         int $pelangganId,
         string $scope,
         ?int $onlineBillingId,
-        CarbonImmutable $start,
-        CarbonImmutable $end,
     ): ?SlaRule {
-        $lastMoment = $end->subSecond();
-
         $query = SlaRule::query()
             ->where('pelanggan_id', $pelangganId)
             ->where('scope', $scope)
-            ->whereDate(
-                'effective_from',
-                '<=',
-                $lastMoment->toDateString()
-            )
-            ->where(function ($query) use ($start) {
-                $query->whereNull('effective_until')
-                    ->orWhereDate(
-                        'effective_until',
-                        '>=',
-                        $start->toDateString()
-                    );
-            });
+            ->whereNull('effective_until');
 
         if ($scope === 'global') {
             $query->whereNull('online_billing_id');
-        } else {
+        } elseif ($scope === 'site' && $onlineBillingId !== null) {
             $query->where(
                 'online_billing_id',
                 $onlineBillingId
             );
+        } else {
+            throw new \InvalidArgumentException(
+                'Cakupan SLA atau ID site tidak valid.'
+            );
         }
 
+        // Ambil maksimal dua baris untuk mendeteksi duplikasi.
         $rules = $query
-            ->orderBy('effective_from')
+            ->orderByDesc('id')
             ->limit(2)
             ->get();
 
         if ($rules->count() > 1) {
-            throw new LogicException(
-                'Terdapat beberapa aturan SLA yang '
-                    . 'bersinggungan dengan periode laporan. '
-                    . 'Periksa effective_from dan effective_until.'
+            throw new \LogicException(
+                "Ditemukan lebih dari satu target SLA aktif untuk "
+                    . "pelanggan ID {$pelangganId}, cakupan {$scope}"
+                    . (
+                        $onlineBillingId !== null
+                        ? ", site ID {$onlineBillingId}"
+                        : ''
+                    )
+                    . '. Periksa data sla_rules.'
             );
         }
 
-        $rule = $rules->first();
-
-        if (!$rule) {
-            return null;
-        }
-
-        $ruleStart = CarbonImmutable::parse(
-            $rule->effective_from
-        )->startOfDay();
-
-        $ruleEnd = $rule->effective_until !== null
-            ? CarbonImmutable::parse(
-                $rule->effective_until
-            )->endOfDay()
-            : null;
-
-        if (
-            $ruleStart->greaterThan($start)
-            || (
-                $ruleEnd !== null
-                && $ruleEnd->lessThan($lastMoment)
-            )
-        ) {
-            throw new LogicException(
-                'Satu aturan SLA tidak mencakup seluruh '
-                    . 'periode laporan. Pisahkan perhitungan '
-                    . 'berdasarkan periode berlakunya aturan.'
-            );
-        }
-
-        return $rule;
+        return $rules->first();
     }
 
     /**

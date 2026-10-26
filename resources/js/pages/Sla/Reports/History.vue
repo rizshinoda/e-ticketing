@@ -207,13 +207,6 @@ function periodLabel(report: SlaReport): string {
                     halaman ini tidak dihitung ulang.
                 </p>
             </div>
-
-            <a
-                href="/sla-reports"
-                class="inline-flex w-fit items-center rounded-md border px-4 py-2 text-sm font-medium hover:bg-muted"
-            >
-                Kembali ke Laporan Bulanan
-            </a>
         </div>
 
         <section class="rounded-xl border bg-card p-5 shadow-sm">
