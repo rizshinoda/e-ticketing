@@ -2,7 +2,11 @@
 import { ref, watch } from 'vue';
 import { router, useForm } from '@inertiajs/vue3';
 import Swal from 'sweetalert2';
-
+import {
+    confirmAction,
+    showSuccessToast,
+    showErrorToast,
+} from '@/lib/sla-notifications';
 interface Category {
     id: number;
     name: string;
@@ -383,31 +387,35 @@ watch(
 |--------------------------------------------------------------------------
 */
 
-const submit = () => {
-    form.manual_sites = manualSites.value;
-
-    Swal.fire({
+const submit = async () => {
+    const confirmed = await confirmAction({
         title: 'Simpan Perubahan?',
         text: 'Pastikan data ticket sudah benar.',
         icon: 'question',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Simpan',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        form.put(`/tickets/${props.ticket.id}`, {
-            onError: (errors) => {
-                console.log('ERROR:', errors);
-            },
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                console.log('SUCCESS');
-            },
-        });
+    form.manual_sites = manualSites.value;
+
+    form.put(`/tickets/${props.ticket.id}`, {
+        preserveScroll: true,
+
+        onError: (errors) => {
+            console.error('ERROR:', errors);
+
+            showErrorToast(
+                'Perubahan ticket gagal disimpan. Periksa kembali data yang dimasukkan.',
+            );
+        },
+
+        onSuccess: () => {
+            showSuccessToast('Perubahan ticket berhasil disimpan.');
+        },
     });
 };
 </script>

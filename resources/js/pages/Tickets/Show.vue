@@ -2,6 +2,11 @@
 import { Link, useForm, usePage, router } from '@inertiajs/vue3';
 import { computed, ref, watch } from 'vue';
 import Swal from 'sweetalert2';
+import {
+    confirmAction,
+    showSuccessToast,
+    showErrorToast,
+} from '@/lib/sla-notifications';
 /*
 |--------------------------------------------------------------------------
 | Interfaces
@@ -198,7 +203,7 @@ const cancelAddSiteForm = () => {
     showSiteResults.value = false;
     showAddSiteForm.value = false;
 };
-const submitAddSite = () => {
+const submitAddSite = async () => {
     if (
         addSiteForm.source === 'online_billing' &&
         !addSiteForm.online_billing_id
@@ -206,7 +211,7 @@ const submitAddSite = () => {
         return;
     }
 
-    if (addSiteForm.source === 'manual' && !addSiteForm.site_name) {
+    if (addSiteForm.source === 'manual' && !addSiteForm.site_name.trim()) {
         return;
     }
 
@@ -215,77 +220,67 @@ const submitAddSite = () => {
             ? siteSearch.value || '-'
             : addSiteForm.site_name;
 
-    Swal.fire({
+    // Konfirmasi sebelum menambahkan site.
+    const confirmed = await confirmAction({
         title: 'Tambah Site?',
         text: `Site "${siteName}" akan ditambahkan ke ticket GAMAS.`,
         icon: 'question',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Tambah',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        addSiteForm.post(`/tickets/${props.ticket.id}/sites`, {
-            preserveScroll: true,
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                addSiteForm.reset();
-                addSiteForm.source = 'online_billing';
+    addSiteForm.post(`/tickets/${props.ticket.id}/sites`, {
+        preserveScroll: true,
 
-                showAddSiteForm.value = false;
-                siteSearch.value = '';
-                showSiteResults.value = false;
+        onSuccess: () => {
+            addSiteForm.reset();
+            addSiteForm.source = 'online_billing';
 
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'Site berhasil ditambahkan ke ticket.',
-                    timer: 2000,
-                    showConfirmButton: false,
-                });
-            },
+            showAddSiteForm.value = false;
+            siteSearch.value = '';
+            showSiteResults.value = false;
 
-            onError: (errors) => {
-                console.log('ADD SITE ERROR:', errors);
-            },
-        });
+            showSuccessToast('Site berhasil ditambahkan ke ticket.');
+        },
+
+        onError: (errors) => {
+            console.error('ADD SITE ERROR:', errors);
+
+            showErrorToast(
+                'Site gagal ditambahkan. Periksa kembali data yang dimasukkan.',
+            );
+        },
     });
 };
-
-const removeSite = (customer: any) => {
-    Swal.fire({
+const removeSite = async (customer: any) => {
+    const confirmed = await confirmAction({
         title: 'Lepas Site?',
         text: `Site "${customer.site_name || '-'}" akan dilepas dari ticket ini.`,
         icon: 'warning',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Lepas',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        router.delete(`/tickets/${props.ticket.id}/sites/${customer.id}`, {
-            preserveScroll: true,
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'Site berhasil dilepas dari ticket.',
-                    timer: 2000,
-                    showConfirmButton: false,
-                });
-            },
+    router.delete(`/tickets/${props.ticket.id}/sites/${customer.id}`, {
+        preserveScroll: true,
 
-            onError: (errors) => {
-                console.log('REMOVE SITE ERROR:', errors);
-            },
-        });
+        onSuccess: () => {
+            showSuccessToast('Site berhasil dilepas dari ticket.');
+        },
+
+        onError: (errors) => {
+            console.error('REMOVE SITE ERROR:', errors);
+
+            showErrorToast('Site gagal dilepas dari ticket.');
+        },
     });
 };
 /*
@@ -420,36 +415,36 @@ const rfoForm = useForm({
     content: '',
 });
 const showRfoForm = ref(false);
-const submitRfo = () => {
-    Swal.fire({
+const submitRfo = async () => {
+    const confirmed = await confirmAction({
         title: 'Buat RFO?',
         text: 'RFO akan disimpan pada ticket ini.',
         icon: 'question',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Simpan',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        rfoForm.post(`/tickets/${props.ticket.id}/rfo`, {
-            preserveScroll: true,
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                rfoForm.reset();
-                showRfoForm.value = false;
+    rfoForm.post(`/tickets/${props.ticket.id}/rfo`, {
+        preserveScroll: true,
 
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'RFO berhasil dibuat.',
-                    timer: 2000,
-                    showConfirmButton: false,
-                });
-            },
-        });
+        onSuccess: () => {
+            rfoForm.reset();
+            showRfoForm.value = false;
+
+            showSuccessToast('RFO berhasil dibuat.');
+        },
+
+        onError: (errors) => {
+            console.error('CREATE RFO ERROR:', errors);
+
+            showErrorToast(
+                'RFO gagal dibuat. Periksa kembali data yang dimasukkan.',
+            );
+        },
     });
 };
 const editingRfoId = ref<number | null>(null);
@@ -465,36 +460,36 @@ const cancelEditRfo = () => {
     editingRfoId.value = null;
     editRfoForm.reset();
 };
-const submitEditRfo = (rfo: Rfo) => {
-    Swal.fire({
+const submitEditRfo = async (rfo: Rfo) => {
+    const confirmed = await confirmAction({
         title: 'Simpan Perubahan RFO?',
         text: 'Perubahan pada RFO akan disimpan.',
         icon: 'question',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Simpan',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        editRfoForm.put(`/tickets/${props.ticket.id}/rfo/${rfo.id}`, {
-            preserveScroll: true,
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                editingRfoId.value = null;
-                editRfoForm.reset();
+    editRfoForm.put(`/tickets/${props.ticket.id}/rfo/${rfo.id}`, {
+        preserveScroll: true,
 
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'RFO berhasil diperbarui.',
-                    timer: 2000,
-                    showConfirmButton: false,
-                });
-            },
-        });
+        onSuccess: () => {
+            editingRfoId.value = null;
+            editRfoForm.reset();
+
+            showSuccessToast('RFO berhasil diperbarui.');
+        },
+
+        onError: (errors) => {
+            console.error('UPDATE RFO ERROR:', errors);
+
+            showErrorToast(
+                'RFO gagal diperbarui. Periksa kembali data yang dimasukkan.',
+            );
+        },
     });
 };
 /*
@@ -519,18 +514,38 @@ const handleFiles = (event: Event) => {
 |--------------------------------------------------------------------------
 */
 
-const submitUpdate = () => {
+const submitUpdate = async () => {
+    const confirmed = await confirmAction({
+        title: 'Kirim Update Ticket?',
+        text: 'Update dan lampiran yang dimasukkan akan disimpan pada ticket ini.',
+        icon: 'question',
+        confirmButtonText: 'Ya, Kirim',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) {
+        return;
+    }
+
     updateForm.post(`/tickets/${props.ticket.id}/updates`, {
         forceFormData: true,
-
         preserveScroll: true,
 
         onSuccess: () => {
             updateForm.reset();
+
+            showSuccessToast('Update ticket berhasil dikirim.');
+        },
+
+        onError: (errors) => {
+            console.error('SUBMIT UPDATE ERROR:', errors);
+
+            showErrorToast(
+                'Update ticket gagal dikirim. Periksa kembali data yang dimasukkan.',
+            );
         },
     });
 };
-
 /*
 |--------------------------------------------------------------------------
 | Stop Clock Form
@@ -560,36 +575,36 @@ const openReopenForm = () => {
     showReopenForm.value = true;
 };
 
-const submitReopen = () => {
-    Swal.fire({
+const submitReopen = async () => {
+    const confirmed = await confirmAction({
         title: 'Re-Open Ticket?',
         text: 'Ticket akan dibuka kembali dan dapat diproses kembali.',
         icon: 'warning',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Re-Open',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        reopenForm.post(`/tickets/${props.ticket.id}/reopen`, {
-            preserveScroll: true,
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                reopenForm.reset();
-                showReopenForm.value = false;
+    reopenForm.post(`/tickets/${props.ticket.id}/reopen`, {
+        preserveScroll: true,
 
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'Ticket berhasil di-Re-Open.',
-                    timer: 2000,
-                    showConfirmButton: false,
-                });
-            },
-        });
+        onSuccess: () => {
+            reopenForm.reset();
+            showReopenForm.value = false;
+
+            showSuccessToast('Ticket berhasil di-Re-Open.');
+        },
+
+        onError: (errors) => {
+            console.error('RE-OPEN TICKET ERROR:', errors);
+
+            showErrorToast(
+                'Ticket gagal di-Re-Open. Periksa kembali data yang dimasukkan.',
+            );
+        },
     });
 };
 /*
@@ -608,39 +623,42 @@ const cancelStopClockForm = () => {
 |--------------------------------------------------------------------------
 */
 
-const submitStopClock = () => {
+const submitStopClock = async () => {
     if (!stopClockForm.reason.trim()) {
+        stopClockForm.setError('reason', 'Alasan Stop Clock wajib diisi.');
         return;
     }
 
-    Swal.fire({
+    stopClockForm.clearErrors();
+
+    const confirmed = await confirmAction({
         title: 'Mulai Stop Clock?',
         text: 'SLA ticket akan dihentikan sementara.',
         icon: 'warning',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Mulai',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock`, {
-            preserveScroll: true,
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                stopClockForm.reset();
+    stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock`, {
+        preserveScroll: true,
 
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'Stop Clock berhasil dimulai.',
-                    timer: 2000,
-                    showConfirmButton: false,
-                });
-            },
-        });
+        onSuccess: () => {
+            stopClockForm.reset();
+
+            showSuccessToast('Stop Clock berhasil dimulai.');
+        },
+
+        onError: (errors) => {
+            console.error('START STOP CLOCK ERROR:', errors);
+
+            showErrorToast(
+                'Stop Clock gagal dimulai. Periksa kembali data yang dimasukkan.',
+            );
+        },
     });
 };
 /*
@@ -649,11 +667,34 @@ const submitStopClock = () => {
 |--------------------------------------------------------------------------
 */
 
-const resumeStopClock = () => {
+const resumeStopClock = async () => {
+    const confirmed = await confirmAction({
+        title: 'Lanjutkan SLA?',
+        text: 'Stop Clock akan dihentikan dan penghitungan SLA akan dilanjutkan.',
+        icon: 'question',
+        confirmButtonText: 'Ya, Lanjutkan',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) {
+        return;
+    }
+
     stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock/resume`, {
         preserveScroll: true,
+
         onSuccess: () => {
             stopClockForm.reset();
+
+            showSuccessToast(
+                'Stop Clock berhasil dihentikan. Penghitungan SLA dilanjutkan.',
+            );
+        },
+
+        onError: (errors) => {
+            console.error('RESUME STOP CLOCK ERROR:', errors);
+
+            showErrorToast('Gagal melanjutkan SLA ticket.');
         },
     });
 };
@@ -678,69 +719,62 @@ const cancelResolveForm = () => {
     showResolveForm.value = false;
 };
 
-const submitResolve = () => {
-    Swal.fire({
+const submitResolve = async () => {
+    const confirmed = await confirmAction({
         title: 'Resolve Ticket?',
         text: 'Ticket akan ditandai sebagai selesai dan tidak dapat diproses kembali sampai di-Re-Open.',
         icon: 'warning',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Resolve',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        resolveForm.post(`/tickets/${props.ticket.id}/resolve`, {
-            preserveScroll: true,
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                resolveForm.reset();
-                showResolveForm.value = false;
+    resolveForm.post(`/tickets/${props.ticket.id}/resolve`, {
+        preserveScroll: true,
 
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'Ticket berhasil di-Resolve.',
-                    timer: 2000,
-                    showConfirmButton: false,
-                });
-            },
-        });
+        onSuccess: () => {
+            resolveForm.reset();
+            showResolveForm.value = false;
+
+            showSuccessToast('Ticket berhasil di-Resolve.');
+        },
+
+        onError: (errors) => {
+            console.error('RESOLVE TICKET ERROR:', errors);
+
+            showErrorToast('Ticket gagal di-Resolve.');
+        },
     });
 };
-const closeTicket = () => {
-    Swal.fire({
+const closeForm = useForm({});
+const closeTicket = async () => {
+    const confirmed = await confirmAction({
         title: 'Close Ticket?',
         text: 'Ticket akan ditutup dan statusnya menjadi Closed.',
         icon: 'warning',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Close',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        useForm({}).post(`/tickets/${props.ticket.id}/close`, {
-            preserveScroll: true,
+    if (!confirmed) {
+        return;
+    }
 
-            onSuccess: () => {
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'Ticket berhasil ditutup.',
-                    timer: 2000,
-                    showConfirmButton: false,
-                });
-            },
+    closeForm.post(`/tickets/${props.ticket.id}/close`, {
+        preserveScroll: true,
 
-            onError: (errors) => {
-                console.log('CLOSE ERRORS:', errors);
-            },
-        });
+        onSuccess: () => {
+            showSuccessToast('Ticket berhasil ditutup.');
+        },
+
+        onError: (errors) => {
+            console.error('CLOSE TICKET ERROR:', errors);
+
+            showErrorToast('Ticket gagal ditutup.');
+        },
     });
 };
 /*
@@ -755,75 +789,75 @@ const hasActiveStopClock = () => {
     );
 };
 
-const showSuccess = ref(false);
-const showResolveError = ref(false);
-const showCloseError = ref(false);
-const showStopClockError = ref(false);
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
+// const showSuccess = ref(false);
+// const showResolveError = ref(false);
+// const showCloseError = ref(false);
+// const showStopClockError = ref(false);
+// let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-const startToastTimer = () => {
-    if (toastTimer) {
-        clearTimeout(toastTimer);
-    }
+// const startToastTimer = () => {
+//     if (toastTimer) {
+//         clearTimeout(toastTimer);
+//     }
 
-    toastTimer = setTimeout(() => {
-        showSuccess.value = false;
-        showResolveError.value = false;
-        showCloseError.value = false;
-        showStopClockError.value = false;
-    }, 3000);
-};
+//     toastTimer = setTimeout(() => {
+//         showSuccess.value = false;
+//         showResolveError.value = false;
+//         showCloseError.value = false;
+//         showStopClockError.value = false;
+//     }, 3000);
+// };
 
-watch(
-    () => page.props.flash.success,
-    (message) => {
-        if (!message) {
-            return;
-        }
+// watch(
+//     () => page.props.flash.success,
+//     (message) => {
+//         if (!message) {
+//             return;
+//         }
 
-        showSuccess.value = true;
-        startToastTimer();
-    },
-    { immediate: true },
-);
+//         showSuccess.value = true;
+//         startToastTimer();
+//     },
+//     { immediate: true },
+// );
 
-watch(
-    () => page.props.errors.resolve,
-    (message) => {
-        if (!message) {
-            return;
-        }
+// watch(
+//     () => page.props.errors.resolve,
+//     (message) => {
+//         if (!message) {
+//             return;
+//         }
 
-        showResolveError.value = true;
-        startToastTimer();
-    },
-    { immediate: true },
-);
+//         showResolveError.value = true;
+//         startToastTimer();
+//     },
+//     { immediate: true },
+// );
 
-watch(
-    () => page.props.errors.close,
-    (message) => {
-        if (!message) {
-            return;
-        }
+// watch(
+//     () => page.props.errors.close,
+//     (message) => {
+//         if (!message) {
+//             return;
+//         }
 
-        showCloseError.value = true;
-        startToastTimer();
-    },
-    { immediate: true },
-);
-watch(
-    () => page.props.errors.stop_clock,
-    (message) => {
-        if (!message) {
-            return;
-        }
+//         showCloseError.value = true;
+//         startToastTimer();
+//     },
+//     { immediate: true },
+// );
+// watch(
+//     () => page.props.errors.stop_clock,
+//     (message) => {
+//         if (!message) {
+//             return;
+//         }
 
-        showStopClockError.value = true;
-        startToastTimer();
-    },
-    { immediate: true },
-);
+//         showStopClockError.value = true;
+//         startToastTimer();
+//     },
+//     { immediate: true },
+// );
 </script>
 
 <template>
@@ -835,7 +869,7 @@ watch(
 
     <!-- SUCCESS TOAST -->
 
-    <div
+    <!-- <div
         v-if="showSuccess && page.props.flash.success"
         class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 shadow-lg"
     >
@@ -850,11 +884,11 @@ watch(
         >
             ×
         </button>
-    </div>
+    </div> -->
 
     <!-- RESOLVE ERROR TOAST -->
 
-    <div
+    <!-- <div
         v-if="showResolveError && page.props.errors.resolve"
         class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
     >
@@ -869,11 +903,11 @@ watch(
         >
             ×
         </button>
-    </div>
+    </div> -->
 
     <!-- CLOSE ERROR TOAST -->
 
-    <div
+    <!-- <div
         v-if="showCloseError && page.props.errors.close"
         class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
     >
@@ -888,8 +922,8 @@ watch(
         >
             ×
         </button>
-    </div>
-    <div
+    </div> -->
+    <!-- <div
         v-if="showStopClockError && page.props.errors.stop_clock"
         class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
     >
@@ -904,7 +938,7 @@ watch(
         >
             ×
         </button>
-    </div>
+    </div> -->
     <div class="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-8">
         <div class="mx-auto max-w-7xl">
             <!-- =====================================================

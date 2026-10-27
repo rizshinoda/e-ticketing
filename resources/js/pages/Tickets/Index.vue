@@ -14,7 +14,12 @@ import {
     RotateCcw,
 } from 'lucide-vue-next';
 import Swal from 'sweetalert2';
-
+import {
+    confirmAction,
+    showAlertDialog,
+    showSuccessToast,
+    showErrorToast,
+} from '@/lib/sla-notifications';
 interface Customer {
     id: number;
     customer_name: string | null;
@@ -190,10 +195,11 @@ const resetFilters = () => {
 |--------------------------------------------------------------------------
 */
 
-const deleteTicket = (ticket: Ticket) => {
-    // Hanya Open yang boleh dihapus
+const deleteTicket = async (ticket: Ticket) => {
+    // Hanya ticket Open yang boleh dihapus.
+    // Hanya ticket Open yang boleh dihapus.
     if (ticket.status !== 'open') {
-        Swal.fire({
+        await showAlertDialog({
             icon: 'error',
             title: 'Tidak Bisa Dihapus',
             text: 'Hanya ticket dengan status Open yang dapat dihapus.',
@@ -203,9 +209,9 @@ const deleteTicket = (ticket: Ticket) => {
         return;
     }
 
-    // Ticket yang pernah di-reopen tidak boleh dihapus
+    // Ticket yang pernah di-reopen tidak boleh dihapus.
     if ((ticket.incidents_count ?? 1) > 1) {
-        Swal.fire({
+        await showAlertDialog({
             icon: 'error',
             title: 'Tidak Bisa Dihapus',
             text: 'Ticket yang pernah di-re-open tidak dapat dihapus.',
@@ -215,44 +221,40 @@ const deleteTicket = (ticket: Ticket) => {
         return;
     }
 
-    Swal.fire({
+    // Konfirmasi sebelum menghapus.
+    const confirmed = await confirmAction({
         title: 'Hapus Ticket?',
         text: 'Ticket yang dihapus tidak dapat dikembalikan.',
         icon: 'warning',
-        showCancelButton: true,
         confirmButtonText: 'Ya, Hapus',
         cancelButtonText: 'Batal',
-        reverseButtons: true,
-    }).then((result) => {
-        if (!result.isConfirmed) {
-            return;
-        }
+    });
 
-        router.delete(`/tickets/${ticket.id}`, {
-            preserveScroll: true,
+    if (!confirmed) return;
 
-            onSuccess: () => {
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Berhasil',
-                    text: 'Ticket berhasil dihapus.',
-                    confirmButtonText: 'OK',
-                });
-            },
-        });
+    router.delete(`/tickets/${ticket.id}`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            showSuccessToast('Ticket berhasil dihapus.');
+        },
+
+        onError: () => {
+            showErrorToast('Ticket gagal dihapus.');
+        },
     });
 };
-
 /*
 |--------------------------------------------------------------------------
 | EDIT TICKET
 |--------------------------------------------------------------------------
 */
 
-const editTicket = (ticket: Ticket) => {
-    // Ticket yang sudah selesai tidak boleh diedit
+const editTicket = async (ticket: Ticket) => {
+    // Ticket yang sudah selesai tidak boleh diedit.
+    // Ticket yang sudah selesai tidak boleh diedit.
     if (ticket.status === 'resolved' || ticket.status === 'closed') {
-        Swal.fire({
+        await showAlertDialog({
             icon: 'error',
             title: 'Tidak Bisa Edit',
             text: 'Ticket yang sudah selesai tidak dapat diedit.',
@@ -262,9 +264,9 @@ const editTicket = (ticket: Ticket) => {
         return;
     }
 
-    // Ticket yang pernah di-reopen tidak boleh diedit
+    // Ticket yang pernah di-reopen tidak boleh diedit.
     if ((ticket.incidents_count ?? 1) > 1) {
-        Swal.fire({
+        await showAlertDialog({
             icon: 'error',
             title: 'Tidak Bisa Edit',
             text: 'Ticket yang pernah di-re-open tidak dapat diedit.',
@@ -276,7 +278,6 @@ const editTicket = (ticket: Ticket) => {
 
     router.visit(`/tickets/${ticket.id}/edit`);
 };
-
 /*
 |--------------------------------------------------------------------------
 | LABEL

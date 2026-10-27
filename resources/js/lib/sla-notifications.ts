@@ -4,8 +4,15 @@ import 'sweetalert2/dist/sweetalert2.min.css';
 interface ConfirmOptions {
     title: string;
     text: string;
+    icon?: 'warning' | 'question' | 'info' | 'success' | 'error';
     confirmButtonText?: string;
     cancelButtonText?: string;
+}
+interface AlertDialogOptions {
+    title: string;
+    text: string;
+    icon?: 'warning' | 'question' | 'info' | 'success' | 'error';
+    confirmButtonText?: string;
 }
 
 function themeColors() {
@@ -67,5 +74,19 @@ export function showErrorToast(title: string): void {
         showConfirmButton: false,
         timer: 4000,
         timerProgressBar: true,
+    });
+}
+
+export function showAlertDialog(options: AlertDialogOptions): Promise<unknown> {
+    const theme = themeColors();
+
+    return Swal.fire({
+        title: options.title,
+        text: options.text,
+        icon: options.icon ?? 'info',
+        background: theme.background,
+        color: theme.color,
+        confirmButtonText: options.confirmButtonText ?? 'OK',
+        confirmButtonColor: '#6366f1',
     });
 }
