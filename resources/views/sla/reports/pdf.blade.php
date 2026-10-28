@@ -4,6 +4,7 @@
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
     <title>Laporan SLA {{ $report->customer_name }}</title>
+
     <style>
         @page {
             margin: 28px 30px;
@@ -101,6 +102,7 @@
             border: 1px solid #d1d5db;
             padding: 6px;
             text-align: left;
+            vertical-align: top;
         }
 
         table.data th {
@@ -132,154 +134,376 @@
         .nowrap {
             white-space: nowrap;
         }
+
+        .site-name {
+            font-weight: bold;
+        }
+
+        .site-network {
+            margin-top: 3px;
+            color: #6b7280;
+            font-size: 8px;
+        }
     </style>
 </head>
 
 <body>
     @php
     $monthNames = [
-    1 => 'Januari', 2 => 'Februari', 3 => 'Maret', 4 => 'April',
-    5 => 'Mei', 6 => 'Juni', 7 => 'Juli', 8 => 'Agustus',
-    9 => 'September', 10 => 'Oktober', 11 => 'November', 12 => 'Desember',
+    1 => 'Januari',
+    2 => 'Februari',
+    3 => 'Maret',
+    4 => 'April',
+    5 => 'Mei',
+    6 => 'Juni',
+    7 => 'Juli',
+    8 => 'Agustus',
+    9 => 'September',
+    10 => 'Oktober',
+    11 => 'November',
+    12 => 'Desember',
     ];
 
     $monthName = $monthNames[(int) $report->month] ?? (string) $report->month;
+
     $startLabel = '1 ' . $monthName . ' ' . $report->year;
-    $endDay = \Illuminate\Support\Carbon::create((int) $report->year, (int) $report->month, 1)->endOfMonth()->day;
+
+    $endDay = \Illuminate\Support\Carbon::create(
+    (int) $report->year,
+    (int) $report->month,
+    1
+    )->endOfMonth()->day;
+
     $endLabel = $endDay . ' ' . $monthName . ' ' . $report->year;
 
-    $target = data_get($result, 'target_sla_percentage', $report->target_sla_percentage);
-    $availability = data_get($result, 'availability_percentage', $report->availability_percentage);
-    $downtime = (int) data_get($result, 'downtime_seconds', data_get($result, 'total_downtime_site_seconds', $report->downtime_seconds ?? 0));
-    $serviceTime = (int) data_get($result, 'total_service_seconds', $report->total_service_seconds ?? 0);
-    $isSlaMet = data_get($result, 'is_sla_met', $report->is_sla_met);
+    $target = data_get(
+    $result,
+    'target_sla_percentage',
+    $report->target_sla_percentage
+    );
+
+    $availability = data_get(
+    $result,
+    'availability_percentage',
+    $report->availability_percentage
+    );
+
+    $downtime = (int) data_get(
+    $result,
+    'downtime_seconds',
+    data_get(
+    $result,
+    'total_downtime_site_seconds',
+    $report->downtime_seconds ?? 0
+    )
+    );
+
+    $serviceTime = (int) data_get(
+    $result,
+    'total_service_seconds',
+    $report->total_service_seconds ?? 0
+    );
+
+    $isSlaMet = data_get(
+    $result,
+    'is_sla_met',
+    $report->is_sla_met
+    );
+
     $sites = data_get($result, 'sites', []);
+
+    if (!is_array($sites)) {
+    $sites = [];
+    }
+
+    $instansiName = $report->instansi_name
+    ?: data_get($result, 'instansi_name', '-');
+
+    $scopeLabel = match ($report->scope) {
+    'global' => 'SLA Global Pelanggan',
+    'site' => 'SLA Per Site',
+    'instansi' => 'SLA Per Instansi',
+    default => ucfirst((string) $report->scope),
+    };
+
+    $targetLabel = match ($report->scope) {
+    'site' => 'Target SLA Site',
+    'instansi' => 'Target SLA Global Pelanggan',
+    default => 'Target SLA Global Pelanggan',
+    };
 
     $formatDuration = function ($seconds) {
     $seconds = max(0, (int) $seconds);
+
     $hours = intdiv($seconds, 3600);
     $minutes = intdiv($seconds % 3600, 60);
     $remainingSeconds = $seconds % 60;
-    return number_format($hours, 0, ',', '.') . ' jam ' . $minutes . ' menit ' . $remainingSeconds . ' detik';
+
+    return number_format($hours, 0, ',', '.')
+    . ' jam '
+    . $minutes
+    . ' menit '
+    . $remainingSeconds
+    . ' detik';
     };
 
     $formatPercent = function ($value, $decimals = 2) {
-    if ($value === null || $value === '') return '-';
-    return number_format((float) $value, $decimals, ',', '.') . '%';
+    if ($value === null || $value === '') {
+    return '-';
+    }
+
+    return number_format(
+    (float) $value,
+    $decimals,
+    ',',
+    '.'
+    ) . '%';
     };
     @endphp
 
+    <!-- Header -->
     <div class="header">
         <h1>Laporan SLA Bulanan</h1>
-        <p class="muted">Laporan resmi berdasarkan snapshot yang telah difinalisasi.</p>
+        <p class="muted">
+            Laporan resmi berdasarkan snapshot yang telah difinalisasi.
+        </p>
     </div>
 
+    <!-- Informasi laporan -->
     <table class="meta">
         <tr>
             <td>
                 <p><strong>Pelanggan</strong></p>
                 <p>{{ $report->customer_name }}</p>
             </td>
+
             <td>
                 <p><strong>Cakupan SLA</strong></p>
-                <p>{{ $report->scope === 'global' ? 'SLA Global' : 'SLA per Site' }}</p>
+                <p>{{ $scopeLabel }}</p>
             </td>
         </tr>
+
         <tr>
             <td>
                 <p><strong>Periode Laporan</strong></p>
                 <p>{{ $startLabel }} – {{ $endLabel }}</p>
             </td>
+
             <td>
                 <p><strong>Nomor Laporan</strong></p>
                 <p>{{ $report->id }}</p>
             </td>
         </tr>
+
         @if ($report->scope === 'site')
         <tr>
             <td colspan="2">
                 <p><strong>Site</strong></p>
-                <p>{{ $report->site_name ?: data_get($result, 'site_name', 'Nama site tidak tersedia') }}</p>
+                <p>
+                    {{ $report->site_name ?: data_get($result, 'site_name', 'Nama site tidak tersedia') }}
+                </p>
+            </td>
+        </tr>
+        @endif
+
+        @if ($report->scope === 'instansi')
+        <tr>
+            <td colspan="2">
+                <p><strong>Instansi</strong></p>
+                <p>{{ $instansiName }}</p>
             </td>
         </tr>
         @endif
     </table>
 
+    <!-- Ringkasan SLA -->
     <table class="cards">
         <tr>
             <td>
-                <div class="label">Target SLA</div>
-                <div class="value">{{ $formatPercent($target, 2) }}</div>
+                <div class="label">{{ $targetLabel }}</div>
+                <div class="value">
+                    {{ $formatPercent($target, 2) }}
+                </div>
             </td>
+
             <td>
                 <div class="label">Availability</div>
-                <div class="value">{{ $formatPercent($availability, 4) }}</div>
+                <div class="value">
+                    {{ $formatPercent($availability, 4) }}
+                </div>
             </td>
+
             <td>
                 <div class="label">Total Downtime</div>
-                <div class="value" style="font-size: 10px">{{ $formatDuration($downtime) }}</div>
+                <div class="value" style="font-size: 10px">
+                    {{ $formatDuration($downtime) }}
+                </div>
             </td>
+
             <td>
                 <div class="label">Total Waktu Layanan</div>
-                <div class="value" style="font-size: 10px">{{ $formatDuration($serviceTime) }}</div>
+                <div class="value" style="font-size: 10px">
+                    {{ $formatDuration($serviceTime) }}
+                </div>
             </td>
         </tr>
     </table>
 
+    <!-- Status SLA -->
     <h2>Status Pemenuhan Target SLA</h2>
-    <p class="status {{ $isSlaMet ? 'success' : 'danger' }}">
-        {{ $isSlaMet ? 'SLA Tercapai' : 'SLA Tidak Tercapai' }}
-    </p>
 
-    @if ($report->scope === 'global' && is_array($sites) && count($sites) > 0)
-    <h2>Rincian SLA per Site</h2>
+    @if ($isSlaMet === true)
+    <p class="status success">SLA Tercapai</p>
+    @elseif ($isSlaMet === false)
+    <p class="status danger">SLA Tidak Tercapai</p>
+    @else
+    <p class="status muted">Target SLA belum dapat dinilai</p>
+    @endif
+
+    <!-- Rincian seluruh site untuk Global dan Instansi -->
+    @if (
+    in_array($report->scope, ['global', 'instansi'], true)
+    && count($sites) > 0
+    )
+    <h2>
+        @if ($report->scope === 'instansi')
+        Rincian SLA per Site — {{ $instansiName }}
+        @else
+        Rincian SLA per Site
+        @endif
+    </h2>
+
+    @if ($report->scope === 'instansi')
+    <p class="muted">
+        Tabel berikut memuat site yang dihitung untuk instansi ini.
+        Pencapaian SLA agregat instansi dibandingkan dengan target
+        SLA global pelanggan.
+    </p>
+    @endif
+
     <table class="data">
         <thead>
             <tr>
                 <th>Site</th>
-                <th class="num">Target SLA</th>
+                <th class="num">Target SLA Site</th>
                 <th class="num">Waktu Layanan</th>
                 <th class="num">Availability</th>
                 <th class="num">Downtime</th>
                 <th>Status</th>
             </tr>
         </thead>
+
         <tbody>
             @foreach ($sites as $site)
             @php
-            $siteTarget = data_get($site, 'target_sla_percentage');
+            $siteName = data_get(
+            $site,
+            'site_name',
+            data_get($site, 'nama_site', 'Site tidak diketahui')
+            );
+
+            $siteNetwork = data_get($site, 'no_jaringan');
+
+            $siteTarget = data_get(
+            $site,
+            'target_sla_percentage'
+            );
+
             $siteMet = data_get($site, 'is_sla_met');
-            $siteReportStatus = data_get($site, 'report_status');
+
+            $siteReportStatus = data_get(
+            $site,
+            'report_status'
+            );
             @endphp
+
             <tr>
-                <td>{{ data_get($site, 'site_name', 'Site tidak diketahui') }}</td>
-                <td class="num">{{ $formatPercent($siteTarget, 2) }}</td>
-                <td class="num nowrap">{{ $formatDuration(data_get($site, 'total_service_seconds', 0)) }}</td>
-                <td class="num">{{ $formatPercent(data_get($site, 'availability_percentage'), 4) }}</td>
-                <td class="num nowrap">{{ $formatDuration(data_get($site, 'downtime_seconds', 0)) }}</td>
+                <td>
+                    <div class="site-name">
+                        {{ $siteName }}
+                    </div>
+
+                    @if ($siteNetwork)
+                    <div class="site-network">
+                        No. Jaringan: {{ $siteNetwork }}
+                    </div>
+                    @endif
+                </td>
+
+                <td class="num">
+                    {{ $formatPercent($siteTarget, 2) }}
+                </td>
+
+                <td class="num nowrap">
+                    {{
+                                $formatDuration(
+                                    data_get($site, 'total_service_seconds', 0)
+                                )
+                            }}
+                </td>
+
+                <td class="num">
+                    {{
+                                $formatPercent(
+                                    data_get($site, 'availability_percentage'),
+                                    4
+                                )
+                            }}
+                </td>
+
+                <td class="num nowrap">
+                    {{
+                                $formatDuration(
+                                    data_get($site, 'downtime_seconds', 0)
+                                )
+                            }}
+                </td>
+
                 <td>
                     @if ($siteReportStatus === 'provisional')
                     Sementara
-                    @elseif ($siteTarget === null || $siteReportStatus === 'missing_sla_rule')
+                    @elseif (
+                    $siteTarget === null
+                    || $siteReportStatus === 'missing_sla_rule'
+                    )
                     Target belum tersedia
                     @elseif ($siteMet === true)
                     Tercapai
-                    @else
+                    @elseif ($siteMet === false)
                     Tidak tercapai
+                    @else
+                    Belum dapat dinilai
                     @endif
                 </td>
             </tr>
             @endforeach
         </tbody>
     </table>
+    @elseif (in_array($report->scope, ['global', 'instansi'], true))
+    <h2>Rincian SLA per Site</h2>
+
+    <p class="muted">
+        Tidak ada rincian site dalam snapshot laporan ini.
+    </p>
     @endif
 
+    <!-- Catatan -->
     <div class="note">
-        <strong>Catatan:</strong> Dokumen ini dibuat dari snapshot laporan SLA yang telah difinalisasi pada {{ $report->finalized_at ? \Illuminate\Support\Carbon::parse($report->finalized_at)->format('d-m-Y H:i') : '-' }}. Nilai dalam dokumen ini tidak dihitung ulang saat PDF diunduh.
+        <strong>Catatan:</strong>
+        Dokumen ini dibuat dari snapshot laporan SLA yang telah
+        difinalisasi pada
+        {{
+            $report->finalized_at
+                ? \Illuminate\Support\Carbon::parse($report->finalized_at)->format('d-m-Y H:i')
+                : '-'
+        }}.
+        Nilai dalam dokumen ini tidak dihitung ulang saat PDF diunduh.
     </div>
 
+    <!-- Footer -->
     <div class="footer">
-        Dokumen laporan SLA resmi · ID laporan {{ $report->id }} · Dibuat pada {{ now()->format('d-m-Y H:i') }}
+        Dokumen laporan SLA resmi · ID laporan {{ $report->id }}
+        · Dibuat pada {{ now()->format('d-m-Y H:i') }}
     </div>
 </body>
 

@@ -14,6 +14,8 @@ class SlaReport extends Model
         'scope',
         'online_billing_id',
         'site_name',
+        'instansi_id',
+        'instansi_name',
         'month',
         'year',
         'period_start',

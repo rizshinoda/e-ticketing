@@ -2,21 +2,30 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Instansi;
 use App\Models\OnlineBilling;
 use App\Models\Pelanggan;
 use App\Models\SlaReport;
 use App\Services\SlaCalculationService;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Throwable;
-use Barryvdh\DomPDF\Facade\Pdf;
-use Illuminate\Support\Str;
 
 class SlaMonthlyReportController extends Controller
 {
+    /**
+     * Halaman laporan SLA bulanan.
+     *
+     * Cakupan yang didukung:
+     * - global
+     * - site
+     * - instansi
+     */
     public function index(
         Request $request,
         SlaCalculationService $slaService
@@ -27,12 +36,19 @@ class SlaMonthlyReportController extends Controller
 
         $pelangganId = $request->integer('pelanggan_id') ?: null;
 
+        $scope = (string) $request->input('scope', 'global');
+
+        if (!in_array($scope, ['global', 'site', 'instansi'], true)) {
+            $scope = 'global';
+        }
+
         $filters = [
-            'scope' => $request->input('scope', 'global'),
+            'scope' => $scope,
             'pelanggan_id' => $pelangganId,
             'online_billing_id' => $request->input(
                 'online_billing_id'
             ),
+            'instansi_id' => $request->input('instansi_id'),
             'month' => (string) $request->input(
                 'month',
                 $previousMonth->month
@@ -45,7 +61,34 @@ class SlaMonthlyReportController extends Controller
 
         $customers = Pelanggan::query()
             ->orderBy('nama_pelanggan')
-            ->get(['id', 'nama_pelanggan']);
+            ->get([
+                'id',
+                'nama_pelanggan',
+            ]);
+
+        /*
+         * Daftar instansi yang mempunyai site pada pelanggan terpilih.
+         * Jika pelanggan belum dipilih, tampilkan instansi yang memiliki site.
+         */
+        $instansis = Instansi::query()
+            ->whereIn(
+                'id',
+                OnlineBilling::query()
+                    ->select('instansi_id')
+                    ->whereNotNull('instansi_id')
+                    ->when(
+                        $pelangganId,
+                        fn($query) => $query->where(
+                            'pelanggan_id',
+                            $pelangganId
+                        )
+                    )
+            )
+            ->orderBy('nama_instansi')
+            ->get([
+                'id',
+                'nama_instansi',
+            ]);
 
         $sites = OnlineBilling::query()
             ->when(
@@ -59,13 +102,14 @@ class SlaMonthlyReportController extends Controller
             ->get([
                 'id',
                 'pelanggan_id',
+                'instansi_id',
                 'nama_site',
                 'no_jaringan',
             ]);
 
         /*
-         * Jika laporan sudah difinalisasi, gunakan snapshot lama.
-         * Jangan menghitung ulang dan menimpa hasil resmi.
+         * Jika laporan sudah difinalisasi, gunakan snapshot resmi.
+         * Hasil snapshot tidak dihitung ulang pada halaman ini.
          */
         $reportKey = $this->reportKeyFromRequest($request);
 
@@ -79,6 +123,11 @@ class SlaMonthlyReportController extends Controller
 
         $calculationError = null;
 
+        /*
+         * Hitung laporan hanya jika:
+         * - Belum ada snapshot final untuk cakupan dan periode tersebut.
+         * - Pengguna meminta perhitungan.
+         */
         if (
             !$finalizedReport
             && $request->boolean('calculate')
@@ -86,7 +135,7 @@ class SlaMonthlyReportController extends Controller
             $validated = $request->validate([
                 'scope' => [
                     'required',
-                    Rule::in(['site', 'global']),
+                    Rule::in(['site', 'global', 'instansi']),
                 ],
 
                 'pelanggan_id' => [
@@ -102,6 +151,15 @@ class SlaMonthlyReportController extends Controller
                     'nullable',
                     'integer',
                     'exists:online_billings,id',
+                ],
+
+                'instansi_id' => [
+                    Rule::requiredIf(
+                        $request->input('scope') === 'instansi'
+                    ),
+                    'nullable',
+                    'integer',
+                    'exists:instansis,id',
                 ],
 
                 'month' => [
@@ -125,6 +183,10 @@ class SlaMonthlyReportController extends Controller
                     (int) $validated['month']
                 );
 
+                /*
+                 * Laporan bulanan hanya dapat dihitung untuk bulan
+                 * yang sudah berakhir.
+                 */
                 if (
                     $monthEnd->greaterThan(
                         CarbonImmutable::now()->startOfMonth()
@@ -134,6 +196,9 @@ class SlaMonthlyReportController extends Controller
                         'Laporan SLA bulanan hanya dapat dihitung '
                         . 'untuk bulan yang sudah berakhir.';
                 } elseif ($validated['scope'] === 'site') {
+                    /*
+                     * Laporan satu site.
+                     */
                     $site = OnlineBilling::query()
                         ->whereKey(
                             $validated['online_billing_id']
@@ -155,7 +220,39 @@ class SlaMonthlyReportController extends Controller
                             $monthEnd
                         );
                     }
+                } elseif ($validated['scope'] === 'instansi') {
+                    /*
+                     * Laporan semua site milik instansi tertentu
+                     * di dalam pelanggan yang dipilih.
+                     */
+                    $hasSites = OnlineBilling::query()
+                        ->where(
+                            'pelanggan_id',
+                            $validated['pelanggan_id']
+                        )
+                        ->where(
+                            'instansi_id',
+                            $validated['instansi_id']
+                        )
+                        ->exists();
+
+                    if (!$hasSites) {
+                        $calculationError =
+                            'Tidak ditemukan site untuk instansi '
+                            . 'dan pelanggan yang dipilih.';
+                    } else {
+                        $result = $slaService->calculateInstansi(
+                            (int) $validated['pelanggan_id'],
+                            (int) $validated['instansi_id'],
+                            $monthStart,
+                            $monthEnd
+                        );
+                    }
                 } else {
+                    /*
+                     * Laporan global pelanggan tetap menggunakan
+                     * perhitungan yang sudah ada.
+                     */
                     $result = $slaService->calculateGlobal(
                         (int) $validated['pelanggan_id'],
                         $monthStart,
@@ -175,6 +272,7 @@ class SlaMonthlyReportController extends Controller
         return Inertia::render('Sla/Reports/Monthly', [
             'customers' => $customers,
             'sites' => $sites,
+            'instansis' => $instansis,
             'filters' => $filters,
             'result' => $result,
             'calculationError' => $calculationError,
@@ -185,7 +283,8 @@ class SlaMonthlyReportController extends Controller
     }
 
     /**
-     * Hitung ulang di server, validasi kelayakan, lalu simpan snapshot.
+     * Hitung ulang di server, validasi kelayakan,
+     * lalu simpan snapshot laporan resmi.
      */
     public function finalize(
         Request $request,
@@ -194,7 +293,7 @@ class SlaMonthlyReportController extends Controller
         $validated = $request->validate([
             'scope' => [
                 'required',
-                Rule::in(['site', 'global']),
+                Rule::in(['site', 'global', 'instansi']),
             ],
 
             'pelanggan_id' => [
@@ -210,6 +309,15 @@ class SlaMonthlyReportController extends Controller
                 'nullable',
                 'integer',
                 'exists:online_billings,id',
+            ],
+
+            'instansi_id' => [
+                Rule::requiredIf(
+                    $request->input('scope') === 'instansi'
+                ),
+                'nullable',
+                'integer',
+                'exists:instansis,id',
             ],
 
             'month' => [
@@ -236,12 +344,18 @@ class SlaMonthlyReportController extends Controller
             ? (int) $validated['online_billing_id']
             : null;
 
+        $instansiId = $scope === 'instansi'
+            ? (int) $validated['instansi_id']
+            : null;
+
         [$monthStart, $monthEnd] = $this->makePeriod(
             $year,
             $month
         );
 
-        // Finalisasi hanya untuk bulan yang sudah berakhir.
+        /*
+         * Finalisasi hanya diizinkan untuk bulan yang sudah berakhir.
+         */
         if (
             $monthEnd->greaterThan(
                 CarbonImmutable::now()->startOfMonth()
@@ -257,11 +371,18 @@ class SlaMonthlyReportController extends Controller
             $pelangganId,
             $scope,
             $onlineBillingId,
+            $instansiId,
             $year,
             $month
         );
 
-        if (SlaReport::where('report_key', $reportKey)->exists()) {
+        /*
+         * Jangan membuat snapshot kedua untuk cakupan
+         * dan periode laporan yang sama.
+         */
+        if (
+            SlaReport::where('report_key', $reportKey)->exists()
+        ) {
             throw ValidationException::withMessages([
                 'finalize' =>
                 'Laporan untuk cakupan dan periode ini sudah difinalisasi.',
@@ -271,7 +392,11 @@ class SlaMonthlyReportController extends Controller
         $customer = Pelanggan::findOrFail($pelangganId);
 
         $site = null;
+        $instansi = null;
 
+        /*
+         * Validasi kepemilikan site terhadap pelanggan.
+         */
         if ($scope === 'site') {
             $site = OnlineBilling::query()
                 ->whereKey($onlineBillingId)
@@ -286,15 +411,45 @@ class SlaMonthlyReportController extends Controller
             }
         }
 
+        /*
+         * Validasi instansi dan pastikan mempunyai site
+         * pada pelanggan yang dipilih.
+         */
+        if ($scope === 'instansi') {
+            $instansi = Instansi::query()
+                ->whereKey($instansiId)
+                ->first();
+
+            $hasSites = OnlineBilling::query()
+                ->where('pelanggan_id', $pelangganId)
+                ->where('instansi_id', $instansiId)
+                ->exists();
+
+            if (!$instansi || !$hasSites) {
+                throw ValidationException::withMessages([
+                    'instansi_id' =>
+                    'Instansi tidak ditemukan atau tidak memiliki site '
+                        . 'pada pelanggan yang dipilih.',
+                ]);
+            }
+        }
+
         try {
             /*
              * Jangan mempercayai hasil yang dikirim browser.
-             * Hitung ulang menggunakan data server saat finalisasi.
+             * Seluruh perhitungan dilakukan kembali di server.
              */
             if ($scope === 'site') {
                 $result = $slaService->calculateSite(
                     $pelangganId,
                     (int) $site->id,
+                    $monthStart,
+                    $monthEnd
+                );
+            } elseif ($scope === 'instansi') {
+                $result = $slaService->calculateInstansi(
+                    $pelangganId,
+                    (int) $instansiId,
                     $monthStart,
                     $monthEnd
                 );
@@ -315,20 +470,30 @@ class SlaMonthlyReportController extends Controller
             ]);
         }
 
-        $pendingCount = $scope === 'global'
-            ? (int) ($result['pending_site_incidents_count'] ?? 0)
-            : (int) ($result['pending_incidents_count'] ?? 0);
+        /*
+         * Untuk global dan instansi, layanan terdiri dari
+         * beberapa site. Method calculateInstansi() harus
+         * menghasilkan rincian pending incident yang konsisten.
+         */
+        $pendingCount = $scope === 'site'
+            ? (int) ($result['pending_incidents_count'] ?? 0)
+            : (int) (
+                $result['pending_site_incidents_count']
+                ?? $result['pending_incidents_count']
+                ?? 0
+            );
 
         if ($pendingCount > 0) {
             throw ValidationException::withMessages([
                 'finalize' =>
-                "Masih ada {$pendingCount} insiden-site downtime "
+                "Masih ada {$pendingCount} insiden downtime "
                     . 'yang belum selesai. Laporan belum dapat difinalisasi.',
             ]);
         }
 
         $target = $result['target_sla_percentage'] ?? null;
         $availability = $result['availability_percentage'] ?? null;
+
         $totalServiceSeconds = (int) (
             $result['total_service_seconds'] ?? 0
         );
@@ -353,16 +518,33 @@ class SlaMonthlyReportController extends Controller
         );
 
         /*
-         * Snapshot menyimpan hasil lengkap dari service, termasuk
-         * seluruh rincian site dalam laporan Global.
+         * Snapshot menyimpan hasil lengkap agar laporan resmi
+         * tidak berubah ketika data operasional diperbarui.
          */
         $snapshot = [
             'generated_at' => now()->toIso8601String(),
+
+            'scope' => $scope,
 
             'customer' => [
                 'id' => $customer->id,
                 'name' => $customer->nama_pelanggan,
             ],
+
+            'instansi' => $instansi
+                ? [
+                    'id' => $instansi->id,
+                    'name' => $instansi->nama_instansi,
+                ]
+                : null,
+
+            'site' => $site
+                ? [
+                    'id' => $site->id,
+                    'name' => $site->nama_site,
+                    'no_jaringan' => $site->no_jaringan,
+                ]
+                : null,
 
             'period' => [
                 'start' => $monthStart->toDateString(),
@@ -380,8 +562,12 @@ class SlaMonthlyReportController extends Controller
                 'customer_name' => $customer->nama_pelanggan,
 
                 'scope' => $scope,
+
                 'online_billing_id' => $onlineBillingId,
                 'site_name' => $site?->nama_site,
+
+                'instansi_id' => $instansiId,
+                'instansi_name' => $instansi?->nama_instansi,
 
                 'month' => $month,
                 'year' => $year,
@@ -397,7 +583,11 @@ class SlaMonthlyReportController extends Controller
 
                 'is_sla_met' => $result['is_sla_met'],
 
-                'site_count' => $scope === 'global'
+                'site_count' => in_array(
+                    $scope,
+                    ['global', 'instansi'],
+                    true
+                )
                     ? (int) ($result['site_count'] ?? 0)
                     : 1,
 
@@ -421,6 +611,7 @@ class SlaMonthlyReportController extends Controller
                 'scope' => $scope,
                 'pelanggan_id' => $pelangganId,
                 'online_billing_id' => $onlineBillingId,
+                'instansi_id' => $instansiId,
                 'month' => $month,
                 'year' => $year,
             ])
@@ -430,6 +621,12 @@ class SlaMonthlyReportController extends Controller
             );
     }
 
+    /**
+     * Membuat rentang periode bulanan.
+     *
+     * $end adalah awal bulan berikutnya, sehingga sesuai
+     * dengan rentang waktu [start, end).
+     */
     private function makePeriod(
         int $year,
         int $month
@@ -443,16 +640,32 @@ class SlaMonthlyReportController extends Controller
         return [$start, $start->addMonth()];
     }
 
+    /**
+     * Membuat identitas snapshot berdasarkan pelanggan,
+     * cakupan, dan periode laporan.
+     *
+     * Format global dan site dipertahankan agar snapshot lama
+     * tetap bisa ditemukan menggunakan report key sebelumnya.
+     */
     private function makeReportKey(
         int $pelangganId,
         string $scope,
         ?int $onlineBillingId,
+        ?int $instansiId,
         int $year,
         int $month
     ): string {
-        $scopeKey = $scope === 'global'
-            ? 'global'
-            : 'site-' . $onlineBillingId;
+        $scopeKey = match ($scope) {
+            'global' => 'global',
+
+            'site' => 'site-' . $onlineBillingId,
+
+            'instansi' => 'instansi-' . $instansiId,
+
+            default => throw new \InvalidArgumentException(
+                'Cakupan laporan SLA tidak valid.'
+            ),
+        };
 
         return $pelangganId
             . ':'
@@ -461,7 +674,9 @@ class SlaMonthlyReportController extends Controller
             . sprintf('%04d-%02d', $year, $month);
     }
 
-
+    /**
+     * Mencari report key yang sesuai dengan filter pada halaman laporan.
+     */
     private function reportKeyFromRequest(
         Request $request
     ): ?string {
@@ -470,6 +685,7 @@ class SlaMonthlyReportController extends Controller
             ->subMonth();
 
         $pelangganId = $request->integer('pelanggan_id');
+
         $scope = (string) $request->input('scope', 'global');
 
         $month = filter_var(
@@ -484,7 +700,11 @@ class SlaMonthlyReportController extends Controller
 
         if (
             $pelangganId <= 0
-            || !in_array($scope, ['site', 'global'], true)
+            || !in_array(
+                $scope,
+                ['site', 'global', 'instansi'],
+                true
+            )
             || $month === false
             || $year === false
             || $month < 1
@@ -496,6 +716,7 @@ class SlaMonthlyReportController extends Controller
         }
 
         $onlineBillingId = null;
+        $instansiId = null;
 
         if ($scope === 'site') {
             $onlineBillingId = $request->integer(
@@ -507,29 +728,51 @@ class SlaMonthlyReportController extends Controller
             }
         }
 
+        if ($scope === 'instansi') {
+            $instansiId = $request->integer('instansi_id');
+
+            if ($instansiId <= 0) {
+                return null;
+            }
+        }
+
         return $this->makeReportKey(
             $pelangganId,
             $scope,
             $onlineBillingId,
-            $year,
-            $month
+            $instansiId,
+            (int) $year,
+            (int) $month
         );
     }
 
+    /**
+     * Riwayat semua snapshot laporan SLA.
+     */
     public function history(Request $request)
     {
         $validated = $request->validate([
-            'search' => ['nullable', 'string', 'max:120'],
+            'search' => [
+                'nullable',
+                'string',
+                'max:120',
+            ],
 
             'scope' => [
                 'nullable',
-                Rule::in(['all', 'global', 'site']),
+                Rule::in(['all', 'global', 'site', 'instansi']),
             ],
 
             'pelanggan_id' => [
                 'nullable',
                 'integer',
                 'exists:pelanggans,id',
+            ],
+
+            'instansi_id' => [
+                'nullable',
+                'integer',
+                'exists:instansis,id',
             ],
 
             'month' => [
@@ -551,13 +794,16 @@ class SlaMonthlyReportController extends Controller
             'search' => trim($validated['search'] ?? ''),
             'scope' => $validated['scope'] ?? 'all',
             'pelanggan_id' => $validated['pelanggan_id'] ?? '',
+            'instansi_id' => $validated['instansi_id'] ?? '',
             'month' => $validated['month'] ?? '',
             'year' => $validated['year'] ?? '',
         ];
 
         $reports = SlaReport::query()
-            // Ambil kolom yang diperlukan saja.
-            // Snapshot JSON tidak perlu dimuat pada daftar riwayat.
+            /*
+             * Snapshot JSON tidak dimuat pada daftar riwayat.
+             * JSON hanya diperlukan saat membuka atau mengunduh detail.
+             */
             ->select([
                 'id',
                 'report_key',
@@ -566,6 +812,8 @@ class SlaMonthlyReportController extends Controller
                 'scope',
                 'online_billing_id',
                 'site_name',
+                'instansi_id',
+                'instansi_name',
                 'month',
                 'year',
                 'period_start',
@@ -579,29 +827,39 @@ class SlaMonthlyReportController extends Controller
                 'finalized_at',
             ])
 
-            // Cari berdasarkan pelanggan atau nama site.
+            /*
+             * Pencarian pelanggan, site, atau instansi.
+             */
             ->when(
                 $filters['search'] !== '',
                 function ($query) use ($filters) {
                     $search = $filters['search'];
+                    $keyword = '%' . $search . '%';
 
-                    $query->where(function ($subQuery) use ($search) {
+                    $query->where(function ($subQuery) use ($keyword) {
                         $subQuery
                             ->where(
                                 'customer_name',
                                 'like',
-                                '%' . $search . '%'
+                                $keyword
                             )
                             ->orWhere(
                                 'site_name',
                                 'like',
-                                '%' . $search . '%'
+                                $keyword
+                            )
+                            ->orWhere(
+                                'instansi_name',
+                                'like',
+                                $keyword
                             );
                     });
                 }
             )
 
-            // Filter cakupan SLA.
+            /*
+             * Filter cakupan laporan.
+             */
             ->when(
                 $filters['scope'] !== 'all',
                 fn($query) => $query->where(
@@ -610,7 +868,9 @@ class SlaMonthlyReportController extends Controller
                 )
             )
 
-            // Filter pelanggan.
+            /*
+             * Filter pelanggan.
+             */
             ->when(
                 $filters['pelanggan_id'] !== '',
                 fn($query) => $query->where(
@@ -619,7 +879,20 @@ class SlaMonthlyReportController extends Controller
                 )
             )
 
-            // Filter bulan.
+            /*
+             * Filter instansi.
+             */
+            ->when(
+                $filters['instansi_id'] !== '',
+                fn($query) => $query->where(
+                    'instansi_id',
+                    $filters['instansi_id']
+                )
+            )
+
+            /*
+             * Filter bulan.
+             */
             ->when(
                 $filters['month'] !== '',
                 fn($query) => $query->where(
@@ -628,7 +901,9 @@ class SlaMonthlyReportController extends Controller
                 )
             )
 
-            // Filter tahun.
+            /*
+             * Filter tahun.
+             */
             ->when(
                 $filters['year'] !== '',
                 fn($query) => $query->where(
@@ -640,7 +915,7 @@ class SlaMonthlyReportController extends Controller
             ->orderByDesc('year')
             ->orderByDesc('month')
             ->orderByDesc('finalized_at')
-            ->paginate(15)
+            ->paginate(10)
             ->withQueryString();
 
         $customers = Pelanggan::query()
@@ -650,33 +925,56 @@ class SlaMonthlyReportController extends Controller
                 'nama_pelanggan',
             ]);
 
+        $instansis = Instansi::query()
+            ->whereIn(
+                'id',
+                OnlineBilling::query()
+                    ->select('instansi_id')
+                    ->whereNotNull('instansi_id')
+            )
+            ->orderBy('nama_instansi')
+            ->get([
+                'id',
+                'nama_instansi',
+            ]);
+
         return Inertia::render('Sla/Reports/History', [
             'reports' => $reports,
             'customers' => $customers,
+            'instansis' => $instansis,
             'filters' => $filters,
             'currentYear' => now()->year,
         ]);
     }
 
+    /**
+     * Mengunduh PDF berdasarkan snapshot resmi.
+     */
     public function downloadPdf(SlaReport $report)
     {
-        // Gunakan snapshot resmi yang tersimpan.
         $snapshot = $report->snapshot;
 
         if (
-            !is_array($snapshot) ||
-            !isset($snapshot['result']) ||
-            !is_array($snapshot['result'])
+            !is_array($snapshot)
+            || !isset($snapshot['result'])
+            || !is_array($snapshot['result'])
         ) {
             abort(404, 'Snapshot laporan SLA tidak ditemukan.');
         }
 
         $result = $snapshot['result'];
 
-        // Nama file yang aman untuk diunduh.
-        $name = $report->scope === 'site'
-            ? ($report->site_name ?: $report->customer_name)
-            : $report->customer_name;
+        /*
+         * Nama instansi digunakan untuk laporan instansi.
+         */
+        $name = match ($report->scope) {
+            'site' => $report->site_name ?: $report->customer_name,
+
+            'instansi' => $report->instansi_name
+                ?: $report->customer_name,
+
+            default => $report->customer_name,
+        };
 
         $filename = sprintf(
             'laporan-sla-%s-%04d-%02d-%s.pdf',
@@ -692,7 +990,13 @@ class SlaMonthlyReportController extends Controller
         ])
             ->setPaper(
                 'a4',
-                $report->scope === 'global' ? 'landscape' : 'portrait'
+                in_array(
+                    $report->scope,
+                    ['global', 'instansi'],
+                    true
+                )
+                    ? 'landscape'
+                    : 'portrait'
             )
             ->download($filename);
     }

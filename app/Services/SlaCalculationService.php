@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Instansi;
 use App\Models\OnlineBilling;
 use App\Models\SlaRule;
 use Carbon\CarbonImmutable;
@@ -307,6 +308,196 @@ class SlaCalculationService
         ];
     }
 
+
+    /**
+     * Hitung SLA untuk seluruh site milik satu instansi
+     * dalam pelanggan dan periode laporan yang dipilih.
+     *
+     * Target pembanding tetap menggunakan aturan SLA global pelanggan.
+     *
+     * Periode menggunakan format [start, end):
+     * waktu mulai termasuk, waktu akhir tidak termasuk.
+     */
+    public function calculateInstansi(
+        int $pelangganId,
+        int $instansiId,
+        CarbonInterface $periodStart,
+        CarbonInterface $periodEnd,
+    ): array {
+        [$start, $end] = $this->normalizePeriod(
+            $periodStart,
+            $periodEnd
+        );
+
+        // Pastikan instansi tersedia.
+        $instansi = Instansi::query()->findOrFail($instansiId);
+
+        /*
+     * Gunakan TARGET SLA GLOBAL pelanggan.
+     * Jangan mengambil target instansi atau target site sebagai
+     * target pembanding laporan agregat.
+     */
+        $rule = $this->resolveActiveRule(
+            pelangganId: $pelangganId,
+            scope: 'global',
+            onlineBillingId: null,
+        );
+
+        /*
+     * Ambil site yang:
+     * 1. Milik pelanggan yang dipilih.
+     * 2. Memiliki instansi_id yang dipilih.
+     * 3. Berstatus active.
+     * 4. Memiliki tanggal_mulai sebelum periode berakhir.
+     *
+     * tanggal_akhir tidak digunakan, mengikuti logika
+     * calculateGlobal() yang sudah ada.
+     */
+        $sites = OnlineBilling::query()
+            ->where('pelanggan_id', $pelangganId)
+            ->where('instansi_id', $instansiId)
+            ->where('status', 'active')
+            ->whereNotNull('tanggal_mulai')
+            ->whereDate(
+                'tanggal_mulai',
+                '<',
+                $end->toDateString()
+            )
+            ->orderBy('id')
+            ->get([
+                'id',
+                'nama_site',
+                'no_jaringan',
+                'tanggal_mulai',
+            ]);
+
+        $siteResults = [];
+
+        foreach ($sites as $site) {
+            $siteStart = $start;
+
+            $serviceStart = CarbonImmutable::parse(
+                $site->tanggal_mulai
+            )->startOfDay();
+
+            if ($serviceStart->greaterThan($siteStart)) {
+                $siteStart = $serviceStart;
+            }
+
+            $siteEnd = $end;
+
+            // Site belum mulai beroperasi dalam periode laporan.
+            if (!$siteEnd->greaterThan($siteStart)) {
+                continue;
+            }
+
+            /*
+         * Gunakan kalkulasi site yang sudah ada agar
+         * durasi layanan, downtime, dan pending incident
+         * mengikuti aturan perhitungan yang sama.
+         */
+            $siteResult = $this->calculateSite(
+                pelangganId: $pelangganId,
+                onlineBillingId: (int) $site->id,
+                periodStart: $siteStart,
+                periodEnd: $siteEnd,
+            );
+
+            // Tambahkan identitas site untuk rincian laporan.
+            $siteResult['no_jaringan'] = $site->no_jaringan;
+
+            $siteResults[] = $siteResult;
+        }
+
+        /*
+     * Agregasikan durasi layanan dan downtime semua site
+     * milik instansi yang dipilih.
+     */
+        $siteCount = count($siteResults);
+
+        $totalServiceSeconds = (int) array_sum(
+            array_column(
+                $siteResults,
+                'total_service_seconds'
+            )
+        );
+
+        $totalDowntimeSeconds = (int) array_sum(
+            array_column(
+                $siteResults,
+                'downtime_seconds'
+            )
+        );
+
+        $availability = $totalServiceSeconds > 0
+            ? $this->calculateAvailability(
+                $totalServiceSeconds,
+                $totalDowntimeSeconds,
+            )
+            : null;
+
+        // Target tetap dari aturan global pelanggan.
+        $target = $rule?->sla_percentage !== null
+            ? (float) $rule->sla_percentage
+            : null;
+
+        $pendingSiteIncidentsCount = (int) array_sum(
+            array_column(
+                $siteResults,
+                'pending_incidents_count'
+            )
+        );
+
+        $reportStatus = $pendingSiteIncidentsCount > 0
+            ? 'provisional'
+            : (
+                $totalServiceSeconds <= 0
+                ? 'no_service_period'
+                : (
+                    $target === null
+                    ? 'missing_sla_rule'
+                    : 'ready_to_finalize'
+                )
+            );
+
+        return [
+            'scope' => 'instansi',
+
+            'pelanggan_id' => $pelangganId,
+
+            'instansi_id' => $instansi->id,
+            'instansi_name' => $instansi->nama_instansi,
+
+            'period_start' => $start->toIso8601String(),
+            'period_end' => $end->toIso8601String(),
+
+            // ID aturan global pelanggan yang menjadi pembanding.
+            'sla_rule_id' => $rule?->id,
+            'target_sla_percentage' => $target,
+
+            // Availability agregat seluruh site di instansi.
+            'availability_percentage' => $availability,
+
+            'is_sla_met' => $this->isSlaMet(
+                $availability,
+                $target,
+            ),
+
+            'site_count' => $siteCount,
+
+            'downtime_seconds' => $totalDowntimeSeconds,
+            'total_downtime_site_seconds' => $totalDowntimeSeconds,
+            'total_service_seconds' => $totalServiceSeconds,
+
+            'pending_incidents_count' => $pendingSiteIncidentsCount,
+            'pending_site_incidents_count' => $pendingSiteIncidentsCount,
+
+            'report_status' => $reportStatus,
+
+            // Rincian perhitungan setiap site.
+            'sites' => $siteResults,
+        ];
+    }
 
     /**
      * Hitung downtime efektif untuk satu site.
