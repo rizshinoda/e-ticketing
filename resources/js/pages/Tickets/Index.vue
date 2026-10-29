@@ -97,6 +97,7 @@ const props = defineProps<{
         status?: string | null;
         priority?: string | null;
         date?: string | null;
+        date_type?: 'day' | 'month' | 'year' | null;
     };
 }>();
 const fetchMonitor = async () => {
@@ -149,7 +150,18 @@ const ticketType = ref(props.filters.ticket_type ?? '');
 const kendala = ref(props.filters.kendala ?? '');
 const status = ref(props.filters.status ?? '');
 const priority = ref(props.filters.priority ?? '');
+const dateType = ref<'day' | 'month' | 'year'>(
+    props.filters.date_type ?? 'month',
+);
+
 const date = ref(props.filters.date ?? '');
+
+const currentYear = new Date().getFullYear();
+
+const changeDateType = () => {
+    // Format tanggal berbeda untuk setiap jenis filter.
+    date.value = '';
+};
 
 const doSearch = () => {
     const keyword = search.value.trim();
@@ -162,6 +174,8 @@ const doSearch = () => {
             ...(kendala.value ? { kendala: kendala.value } : {}),
             ...(status.value ? { status: status.value } : {}),
             ...(priority.value ? { priority: priority.value } : {}),
+
+            date_type: dateType.value,
             ...(date.value ? { date: date.value } : {}),
         },
         {
@@ -177,6 +191,8 @@ const resetFilters = () => {
     kendala.value = '';
     status.value = '';
     priority.value = '';
+
+    dateType.value = 'month';
     date.value = '';
 
     router.get(
@@ -510,11 +526,13 @@ const formatDate = (date: string) => {
                 <div class="border-b px-5 py-5">
                     <div class="flex flex-col gap-4">
                         <!-- FILTER INPUTS -->
+
+                        <!-- FILTER INPUTS -->
                         <div
-                            class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_160px_160px_160px_160px_160px]"
+                            class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[minmax(190px,1.3fr)_repeat(5,minmax(110px,0.8fr))_minmax(170px,1fr)]"
                         >
                             <!-- SEARCH -->
-                            <div class="relative">
+                            <div class="relative min-w-0">
                                 <Search
                                     class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground"
                                 />
@@ -523,7 +541,7 @@ const formatDate = (date: string) => {
                                     v-model="search"
                                     type="text"
                                     placeholder="Search ticket ID, customer, site..."
-                                    class="h-10 w-full rounded-lg border border-input bg-background pr-3 pl-9 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                    class="h-10 w-full min-w-0 rounded-lg border border-input bg-background pr-3 pl-9 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                                     @keyup.enter="doSearch"
                                 />
                             </div>
@@ -531,7 +549,7 @@ const formatDate = (date: string) => {
                             <!-- TICKET TYPE -->
                             <select
                                 v-model="ticketType"
-                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                class="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                             >
                                 <option value="">Ticket Type</option>
                                 <option value="individual">Individual</option>
@@ -541,7 +559,7 @@ const formatDate = (date: string) => {
                             <!-- KENDALA -->
                             <select
                                 v-model="kendala"
-                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                class="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                             >
                                 <option value="">Kendala</option>
 
@@ -557,7 +575,7 @@ const formatDate = (date: string) => {
                             <!-- STATUS -->
                             <select
                                 v-model="status"
-                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                class="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                             >
                                 <option value="">Status</option>
                                 <option value="open">Open</option>
@@ -569,7 +587,7 @@ const formatDate = (date: string) => {
                             <!-- PRIORITY -->
                             <select
                                 v-model="priority"
-                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                class="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                             >
                                 <option value="">Priority</option>
                                 <option value="low">Low</option>
@@ -578,11 +596,47 @@ const formatDate = (date: string) => {
                                 <option value="critical">Critical</option>
                             </select>
 
-                            <input
-                                v-model="date"
-                                type="month"
-                                class="h-10 rounded-lg border border-input bg-background px-3 text-sm transition outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-                            />
+                            <!-- DATE TYPE -->
+                            <select
+                                id="dateType"
+                                v-model="dateType"
+                                class="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                @change="changeDateType"
+                            >
+                                <option value="day">Harian</option>
+                                <option value="month">Bulanan</option>
+                                <option value="year">Tahunan</option>
+                            </select>
+
+                            <!-- DATE VALUE -->
+                            <div class="min-w-0">
+                                <input
+                                    v-if="dateType === 'day'"
+                                    id="date"
+                                    v-model="date"
+                                    type="date"
+                                    class="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                />
+
+                                <input
+                                    v-else-if="dateType === 'month'"
+                                    id="date"
+                                    v-model="date"
+                                    type="month"
+                                    class="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                />
+
+                                <input
+                                    v-else
+                                    id="date"
+                                    v-model="date"
+                                    type="number"
+                                    min="2000"
+                                    :max="currentYear"
+                                    placeholder="Masukkan tahun"
+                                    class="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                />
+                            </div>
                         </div>
 
                         <!-- FILTER ACTION -->

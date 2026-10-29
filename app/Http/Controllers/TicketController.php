@@ -37,76 +37,236 @@ class TicketController extends Controller
         $ticketType = $request->query('ticket_type');
         $status = $request->query('status');
         $priority = $request->query('priority');
-        $date = $request->query('date');
         $kendala = $request->query('kendala');
+
+        /*
+    |--------------------------------------------------------------------------
+    | Validasi filter tanggal
+    |--------------------------------------------------------------------------
+    */
+
+        $dateFilters = $request->validate([
+            'date_type' => [
+                'nullable',
+                'in:day,month,year',
+            ],
+
+            'date' => [
+                'nullable',
+                'string',
+                'max:10',
+            ],
+        ]);
+
+        $dateType = $dateFilters['date_type'] ?? 'month';
+        $date = $dateFilters['date'] ?? null;
+
+        /*
+     * Validasi format tanggal sesuai jenis filter.
+     */
+        if ($date !== null && $date !== '') {
+            $dateRules = match ($dateType) {
+                'day' => [
+                    'required',
+                    'date_format:Y-m-d',
+                ],
+
+                'month' => [
+                    'required',
+                    'date_format:Y-m',
+                ],
+
+                'year' => [
+                    'required',
+                    'integer',
+                    'digits:4',
+                    'min:2000',
+                    'max:' . now()->year,
+                ],
+            };
+
+            $request->validate([
+                'date' => $dateRules,
+            ]);
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | Rentang tanggal laporan
+    |--------------------------------------------------------------------------
+    |
+    | Gunakan awal periode inklusif dan akhir periode eksklusif.
+    | Cara ini mencakup seluruh jam dalam tanggal, bulan, atau tahun
+    | yang dipilih.
+    */
+
+        $dateStart = null;
+        $dateEnd = null;
+
+        if ($date !== null && $date !== '') {
+            switch ($dateType) {
+                case 'day':
+                    [$year, $month, $day] = array_map(
+                        'intval',
+                        explode('-', $date)
+                    );
+
+                    $dateStart = Carbon::create(
+                        $year,
+                        $month,
+                        $day
+                    )->startOfDay();
+
+                    $dateEnd = $dateStart->copy()->addDay();
+
+                    break;
+
+                case 'month':
+                    [$year, $month] = array_map(
+                        'intval',
+                        explode('-', $date)
+                    );
+
+                    $dateStart = Carbon::create(
+                        $year,
+                        $month,
+                        1
+                    )->startOfDay();
+
+                    $dateEnd = $dateStart->copy()->addMonth();
+
+                    break;
+
+                case 'year':
+                    $dateStart = Carbon::create(
+                        (int) $date,
+                        1,
+                        1
+                    )->startOfDay();
+
+                    $dateEnd = $dateStart->copy()->addYear();
+
+                    break;
+            }
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | Query tiket
+    |--------------------------------------------------------------------------
+    */
+
         $tickets = Ticket::query()
             ->with([
                 'creator',
                 'customers',
                 'latestIncident.category',
-
             ])
             ->withCount('incidents')
 
-            // SEARCH
+            // SEARCH: nomor tiket, pelanggan, site, dan nomor jaringan
             ->when($search, function ($query, $search) {
                 $query->where(function ($query) use ($search) {
-
-                    // Ticket Number
-                    $query->where('ticket_number', 'like', "%{$search}%")
-
-                        // Customer / Site / No Jaringan
+                    $query
+                        ->where(
+                            'ticket_number',
+                            'like',
+                            "%{$search}%"
+                        )
                         ->orWhereHas('customers', function ($query) use ($search) {
-                            $query->where('customer_name', 'like', "%{$search}%")
-                                ->orWhere('site_name', 'like', "%{$search}%")
-                                ->orWhere('no_jaringan', 'like', "%{$search}%");
+                            $query
+                                ->where(
+                                    'customer_name',
+                                    'like',
+                                    "%{$search}%"
+                                )
+                                ->orWhere(
+                                    'site_name',
+                                    'like',
+                                    "%{$search}%"
+                                )
+                                ->orWhere(
+                                    'no_jaringan',
+                                    'like',
+                                    "%{$search}%"
+                                );
                         });
                 });
             })
 
             // TICKET TYPE
-            ->when($ticketType, fn($query, $ticketType) => $query->where('ticket_type', $ticketType))
+            ->when(
+                $ticketType,
+                fn($query, $ticketType) => $query->where(
+                    'ticket_type',
+                    $ticketType
+                )
+            )
+
             // STATUS
-            ->when($status, function ($query, $status) {
-                $query->where('status', $status);
-            })
+            ->when(
+                $status,
+                fn($query, $status) => $query->where(
+                    'status',
+                    $status
+                )
+            )
 
             // PRIORITY
-            ->when($priority, function ($query, $priority) {
-                $query->where('priority', $priority);
-            })
+            ->when(
+                $priority,
+                fn($query, $priority) => $query->where(
+                    'priority',
+                    $priority
+                )
+            )
 
-            // DATE REPORTED
-            ->when($date, function ($query, $date) {
-                $startOfMonth = Carbon::createFromFormat('Y-m', $date)
-                    ->startOfMonth();
+            // DATE REPORTED: harian, bulanan, atau tahunan
+            ->when(
+                $dateStart !== null && $dateEnd !== null,
+                function ($query) use ($dateStart, $dateEnd) {
+                    $query
+                        ->where('reported_at', '>=', $dateStart)
+                        ->where('reported_at', '<', $dateEnd);
+                }
+            )
 
-                $endOfMonth = Carbon::createFromFormat('Y-m', $date)
-                    ->endOfMonth();
-
-                $query->whereBetween('reported_at', [
-                    $startOfMonth,
-                    $endOfMonth,
-                ]);
-            })
             // KENDALA
             ->when($kendala, function ($query, $kendala) {
                 $query->whereHas('latestIncident', function ($query) use ($kendala) {
                     $query->where('kendala_id', $kendala);
                 });
             })
+
+            // URUTAN DAN PAGINATION
             ->latest()
             ->paginate(10)
             ->withQueryString();
 
+        /*
+    |--------------------------------------------------------------------------
+    | Master data kendala
+    |--------------------------------------------------------------------------
+    */
 
         $kendalas = TicketCategory::query()
             ->orderBy('name')
-            ->get(['id', 'name']);
+            ->get([
+                'id',
+                'name',
+            ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | Response Inertia
+    |--------------------------------------------------------------------------
+    */
+
         return Inertia::render('Tickets/Index', [
             'tickets' => $tickets,
 
             'ticketStats' => Ticket::dashboardStats(),
+
             'kendalas' => $kendalas,
 
             'filters' => [
@@ -115,6 +275,7 @@ class TicketController extends Controller
                 'status' => $status,
                 'priority' => $priority,
                 'date' => $date,
+                'date_type' => $dateType,
                 'kendala' => $kendala,
             ],
         ]);
