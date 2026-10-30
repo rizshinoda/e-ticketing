@@ -1137,7 +1137,7 @@ function formatDateTime(value: string): string {
                 </div>
 
                 <!-- Data laporan untuk pemeriksaan -->
-                <details class="rounded-xl border border-border bg-card p-5">
+                <!-- <details class="rounded-xl border border-border bg-card p-5">
                     <summary class="cursor-pointer font-semibold">
                         Detail data laporan
                     </summary>
@@ -1145,7 +1145,7 @@ function formatDateTime(value: string): string {
                     <pre
                         class="mt-4 overflow-x-auto rounded-md bg-muted p-4 text-xs"
                         >{{ JSON.stringify(props.result, null, 2) }}</pre>
-                </details>
+                </details> -->
             </section>
         </template>
     </div>
