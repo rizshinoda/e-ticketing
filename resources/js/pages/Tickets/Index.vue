@@ -1063,9 +1063,9 @@ const formatDate = (date: string) => {
                             >
                                 {{
                                     link.label.includes('previous')
-                                        ? '‹ Sebelumnya'
+                                        ? ' Sebelumnya'
                                         : link.label.includes('next')
-                                          ? 'Berikutnya ›'
+                                          ? 'Berikutnya '
                                           : link.label
                                 }}
                             </Link>
@@ -1076,9 +1076,9 @@ const formatDate = (date: string) => {
                             >
                                 {{
                                     link.label.includes('previous')
-                                        ? '‹ Sebelumnya'
+                                        ? ' Sebelumnya'
                                         : link.label.includes('next')
-                                          ? 'Berikutnya ›'
+                                          ? 'Berikutnya '
                                           : link.label
                                 }}
                             </span>

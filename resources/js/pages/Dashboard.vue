@@ -4,11 +4,10 @@ import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { useEchoPublic } from '@laravel/echo-vue';
 import { dashboard } from '@/routes';
 
-import { Donut, GroupedBar } from '@unovis/ts';
+import { Donut } from '@unovis/ts';
 import {
     VisArea,
     VisAxis,
-    VisCrosshair,
     VisDonut,
     VisGroupedBar,
     VisLine,
@@ -38,6 +37,14 @@ import {
     CardHeader,
     CardTitle,
 } from '@/components/ui/card';
+import {
+    ChartContainer,
+    ChartCrosshair,
+    ChartTooltip,
+    ChartTooltipContent,
+    componentToString,
+    type ChartConfig,
+} from '@/components/ui/chart';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 defineOptions({
@@ -171,7 +178,14 @@ const toggleStatus = (key: StatusKey) => {
     activeStatus.value = activeStatus.value === key ? null : key;
 };
 
-/* ---------- Chart status ---------- */
+/* ---------- Chart status (shadcn-vue) ---------- */
+const statusChartConfig = {
+    total: {
+        label: 'Ticket',
+        color: '#3b82f6',
+    },
+} satisfies ChartConfig;
+
 const chartData = computed(() =>
     props.statusChart.map((item, index) => ({
         index,
@@ -191,15 +205,14 @@ const statusBarColor = (d: StatusDatum) => {
         : base;
 };
 
-const statusTooltip = {
-    [GroupedBar.selectors.bar]: (d: StatusDatum) => `
-        <div style="font-weight:600">${d.status}</div>
-        <div style="margin-top:4px">
-            <strong>${d.total}</strong> ticket · ${percent(d.total)}%
-        </div>`,
-};
+const statusTooltipTemplate = computed(() =>
+    componentToString(statusChartConfig, ChartTooltipContent, {
+        labelFormatter: (d: number | Date) =>
+            chartData.value[Math.round(Number(d))]?.status ?? '',
+    }),
+);
 
-/* ---------- Chart prioritas ---------- */
+/* ---------- Chart prioritas (shadcn-vue) ---------- */
 const priorities = computed(() => [
     {
         key: 'critical',
@@ -228,6 +241,13 @@ const priorities = computed(() => [
 ]);
 type PriorityDatum = (typeof priorities.value)[number];
 
+const priorityChartConfig = {
+    critical: { label: 'Critical', color: '#ef4444' },
+    high: { label: 'High', color: '#f97316' },
+    medium: { label: 'Medium', color: '#eab308' },
+    low: { label: 'Low', color: '#94a3b8' },
+} satisfies ChartConfig;
+
 const priorityTotal = computed(() =>
     priorities.value.reduce((sum, p) => sum + p.total, 0),
 );
@@ -240,11 +260,25 @@ const priorityColor = (d: PriorityDatum) =>
 
 const priorityTooltip = {
     [Donut.selectors.segment]: (d: { data: PriorityDatum }) => `
-        <div style="font-weight:600">${d.data.label}</div>
-        <div style="margin-top:4px"><strong>${d.data.total}</strong> ticket</div>`,
+        <div class="min-w-[8rem] rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs text-foreground shadow-xl">
+            <div class="flex items-center gap-2 font-medium">
+                <span class="h-2.5 w-2.5 shrink-0 rounded-[2px]" style="background-color:${d.data.color}"></span>
+                ${d.data.label}
+            </div>
+            <div class="mt-1 text-muted-foreground">
+                <strong class="font-mono font-medium text-foreground tabular-nums">${d.data.total}</strong> ticket
+            </div>
+        </div>`,
 };
 
-/* ---------- Chart bulanan ---------- */
+/* ---------- Chart bulanan (shadcn-vue) ---------- */
+const monthlyChartConfig = {
+    total: {
+        label: 'Ticket dilaporkan',
+        color: '#3b82f6',
+    },
+} satisfies ChartConfig;
+
 const period = ref('12');
 const monthly = computed(() =>
     props.monthlyTicketChart
@@ -255,6 +289,8 @@ const monthly = computed(() =>
             total: item.total,
         })),
 );
+type MonthlyDatum = (typeof monthly.value)[number];
+
 const monthlySum = computed(() =>
     monthly.value.reduce((sum, d) => sum + d.total, 0),
 );
@@ -282,9 +318,13 @@ const monthlyDelta = computed(() => {
 });
 const monthTick = (i: number) =>
     monthly.value.find((d) => d.index === i)?.month ?? '';
-const crosshairTemplate = (d: { month: string; total: number }) => `
-    <div style="font-weight:600">${d.month}</div>
-    <div style="margin-top:4px"><strong>${d.total}</strong> ticket dilaporkan</div>`;
+
+const monthlyTooltipTemplate = computed(() =>
+    componentToString(monthlyChartConfig, ChartTooltipContent, {
+        labelFormatter: (d: number | Date) =>
+            monthly.value[Math.round(Number(d))]?.month ?? '',
+    }),
+);
 </script>
 
 <template>
@@ -450,15 +490,22 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
                 </CardHeader>
 
                 <CardContent>
-                    <div class="h-[280px] w-full">
-                        <VisXYContainer :data="chartData">
+                    <ChartContainer
+                        :config="statusChartConfig"
+                        class="aspect-auto h-[280px] w-full"
+                    >
+                        <VisXYContainer
+                            :data="chartData"
+                            :margin="{ left: 0, right: 8, top: 8 }"
+                            :y-domain="[0, undefined]"
+                        >
                             <VisGroupedBar
                                 :x="(d: StatusDatum) => d.index"
                                 :y="[(d: StatusDatum) => d.total]"
                                 :color="statusBarColor"
                                 :rounded-corners="6"
-                                bar-padding="0.3"
-                                group-padding="0.1"
+                                :bar-padding="0.3"
+                                :group-padding="0.1"
                             />
                             <VisAxis
                                 type="x"
@@ -474,13 +521,21 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
                             />
                             <VisAxis
                                 type="y"
+                                :tick-format="
+                                    (v: number) =>
+                                        Number.isInteger(v) ? String(v) : ''
+                                "
                                 :tick-line="false"
                                 :domain-line="false"
                                 :grid-line="true"
                             />
-                            <VisTooltip :triggers="statusTooltip" />
+                            <ChartTooltip />
+                            <ChartCrosshair
+                                :template="statusTooltipTemplate"
+                                :color="() => 'var(--color-total)'"
+                            />
                         </VisXYContainer>
-                    </div>
+                    </ChartContainer>
 
                     <div v-if="activeStatus" class="mt-4 flex justify-end">
                         <Button
@@ -500,8 +555,6 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
             </Card>
 
             <!-- Prioritas -->
-            <!-- Prioritas -->
-            <!-- Prioritas -->
             <Card class="min-w-0 lg:col-span-2">
                 <CardHeader class="pb-2">
                     <CardTitle class="text-base"> Priority Ticket </CardTitle>
@@ -515,23 +568,24 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
                     <div
                         class="grid min-w-0 items-center gap-4 sm:grid-cols-[190px_minmax(0,1fr)]"
                     >
-                        <!-- DONUT -->
                         <!-- Donut -->
                         <div class="relative mx-auto h-[220px] w-[220px]">
-                            <VisSingleContainer
-                                :data="priorities"
-                                class="h-full w-full"
+                            <ChartContainer
+                                :config="priorityChartConfig"
+                                class="aspect-auto h-full w-full"
                             >
-                                <VisDonut
-                                    :value="(d: PriorityDatum) => d.total"
-                                    :color="priorityColor"
-                                    :arc-width="24"
-                                    :pad-angle="0.02"
-                                    :corner-radius="4"
-                                />
+                                <VisSingleContainer :data="priorities">
+                                    <VisDonut
+                                        :value="(d: PriorityDatum) => d.total"
+                                        :color="priorityColor"
+                                        :arc-width="24"
+                                        :pad-angle="0.02"
+                                        :corner-radius="4"
+                                    />
 
-                                <VisTooltip :triggers="priorityTooltip" />
-                            </VisSingleContainer>
+                                    <VisTooltip :triggers="priorityTooltip" />
+                                </VisSingleContainer>
+                            </ChartContainer>
 
                             <!-- Total di tengah donut -->
                             <div
@@ -551,7 +605,7 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
                             </div>
                         </div>
 
-                        <!-- LEGEND -->
+                        <!-- Legend -->
                         <div class="min-w-0 pl-4">
                             <div class="space-y-1">
                                 <Link
@@ -667,25 +721,26 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
                     </Badge>
                 </div>
 
-                <div class="h-[280px] w-full">
-                    <VisXYContainer :data="monthly">
+                <ChartContainer
+                    :config="monthlyChartConfig"
+                    class="aspect-auto h-[280px] w-full"
+                >
+                    <VisXYContainer
+                        :data="monthly"
+                        :margin="{ left: 0, right: 8, top: 8 }"
+                        :y-domain="[0, undefined]"
+                    >
                         <VisArea
-                            :x="(d: (typeof monthly)[number]) => d.index"
-                            :y="(d: (typeof monthly)[number]) => d.total"
-                            color="#3b82f6"
+                            :x="(d: MonthlyDatum) => d.index"
+                            :y="(d: MonthlyDatum) => d.total"
+                            color="var(--color-total)"
                             :opacity="0.12"
                         />
                         <VisLine
-                            :x="(d: (typeof monthly)[number]) => d.index"
-                            :y="(d: (typeof monthly)[number]) => d.total"
-                            color="#3b82f6"
+                            :x="(d: MonthlyDatum) => d.index"
+                            :y="(d: MonthlyDatum) => d.total"
+                            color="var(--color-total)"
                             :line-width="3"
-                        />
-                        <VisCrosshair
-                            color="#3b82f6"
-                            :x="(d: (typeof monthly)[number]) => d.index"
-                            :y="(d: (typeof monthly)[number]) => d.total"
-                            :template="crosshairTemplate"
                         />
                         <VisAxis
                             type="x"
@@ -697,13 +752,21 @@ const crosshairTemplate = (d: { month: string; total: number }) => `
                         />
                         <VisAxis
                             type="y"
+                            :tick-format="
+                                (v: number) =>
+                                    Number.isInteger(v) ? String(v) : ''
+                            "
                             :tick-line="false"
                             :domain-line="false"
                             :grid-line="true"
                         />
-                        <VisTooltip />
+                        <ChartTooltip />
+                        <ChartCrosshair
+                            :template="monthlyTooltipTemplate"
+                            :color="() => 'var(--color-total)'"
+                        />
                     </VisXYContainer>
-                </div>
+                </ChartContainer>
             </CardContent>
         </Card>
     </div>

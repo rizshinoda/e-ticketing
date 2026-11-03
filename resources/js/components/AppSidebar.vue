@@ -10,6 +10,7 @@ import {
     FlaskConical,
     CalendarDays,
     History,
+    FileText,
 } from '@lucide/vue';
 import { computed } from 'vue';
 
@@ -65,6 +66,12 @@ const menuGroups: MenuGroup[] = [
                 title: 'Ticket',
                 href: '/tickets',
                 icon: Ticket,
+            },
+            {
+                title: 'Laporan Tiket & Kendala',
+                href: '/reports/ticket-disruptions',
+                icon: FileText,
+                exact: true,
             },
         ],
     },

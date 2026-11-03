@@ -8,6 +8,7 @@ use App\Http\Controllers\SlaRuleController;
 use App\Http\Controllers\SlaTestController;
 use App\Http\Controllers\TicketCategoryController;
 use App\Http\Controllers\TicketController;
+use App\Http\Controllers\TicketDisruptionReportController;
 use Illuminate\Support\Facades\Route;
 
 Route::inertia('/', 'Welcome')->name('home');
@@ -208,6 +209,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
         '/sla-rules/bulk-sites',
         [SlaRuleController::class, 'storeBulkSites']
     )->name('sla-rules.bulk-sites.store');
+    Route::get(
+        '/reports/ticket-disruptions',
+        [TicketDisruptionReportController::class, 'index']
+    )->name('reports.ticket-disruptions.index');
 });
 
 require __DIR__ . '/settings.php';
