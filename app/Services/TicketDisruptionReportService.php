@@ -164,10 +164,12 @@ class TicketDisruptionReportService
                 ? CarbonImmutable::parse($row->resolved_at)
                 : null;
 
+            // Gunakan durasi keseluruhan sampai insiden diselesaikan.
+            // Jika belum selesai, gunakan waktu sekarang.
             $durationEnd = $resolvedAt !== null
-                && $resolvedAt->lessThan($durationCutoff)
+                && $resolvedAt->lessThan($now)
                 ? $resolvedAt
-                : $durationCutoff;
+                : $now;
 
             $durationSeconds = max(
                 0,
