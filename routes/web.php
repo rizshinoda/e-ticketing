@@ -9,6 +9,7 @@ use App\Http\Controllers\SlaTestController;
 use App\Http\Controllers\TicketCategoryController;
 use App\Http\Controllers\TicketController;
 use App\Http\Controllers\TicketDisruptionReportController;
+use App\Http\Controllers\TicketDisruptionReportExportController;
 use Illuminate\Support\Facades\Route;
 
 Route::inertia('/', 'Welcome')->name('home');
@@ -213,6 +214,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
         '/reports/ticket-disruptions',
         [TicketDisruptionReportController::class, 'index']
     )->name('reports.ticket-disruptions.index');
+    Route::get(
+        '/reports/ticket-disruptions/export/excel',
+        [TicketDisruptionReportExportController::class, 'download']
+    )->name('reports.ticket-disruptions.export.excel');
+    Route::get(
+        '/reports/ticket-disruptions/export/pdf',
+        [TicketDisruptionReportExportController::class, 'downloadPdf']
+    )->name('reports.ticket-disruptions.export.pdf');
 });
 
 require __DIR__ . '/settings.php';

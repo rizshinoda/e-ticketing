@@ -337,6 +337,37 @@ const hasTrendData = computed(() =>
                 >
                     Tampilkan
                 </button>
+                <a
+                    :href="`/reports/ticket-disruptions/export/excel?month=${selectedMonth}&year=${selectedYear}`"
+                    class="inline-flex items-center justify-center rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
+                >
+                    Export Excel
+                </a>
+                <a
+                    :href="`/reports/ticket-disruptions/export/pdf?month=${selectedMonth}&year=${selectedYear}`"
+                    class="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <path
+                            d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+                        />
+                        <path d="M14 2v6h6" />
+                        <path d="M8 13h8" />
+                        <path d="M8 17h8" />
+                    </svg>
+
+                    Export PDF
+                </a>
             </div>
         </div>
 
