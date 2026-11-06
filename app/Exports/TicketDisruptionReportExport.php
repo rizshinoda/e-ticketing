@@ -94,12 +94,17 @@ class TicketDisruptionReportExport implements WithMultipleSheets
                     'A' => 20,
                     'B' => 15,
                     'C' => 20,
-                    'D' => 25,
-                    'E' => 75,
-                    'F' => 23,
-                    'G' => 23,
-                    'H' => 30,
-                ]
+                    'D' => 22,
+                    'E' => 45,
+                    'F' => 22,
+                    'G' => 22,
+                    'H' => 25,
+                    'I' => 65,
+                ],
+                true,
+                'A2',
+                ['I'],
+                true
             ),
         ];
     }
@@ -297,10 +302,12 @@ class TicketDisruptionReportExport implements WithMultipleSheets
                 'Dilaporkan',
                 'Diselesaikan',
                 'Durasi Penanganan',
+                'RFO / Penyebab Gangguan',
             ],
         ];
 
         foreach ($this->report['incident_details'] ?? [] as $item) {
+            // Data site terdampak.
             $sites = [];
 
             foreach ($item['sites'] ?? [] as $site) {
@@ -315,26 +322,65 @@ class TicketDisruptionReportExport implements WithMultipleSheets
                 $sites[] = $siteName;
             }
 
+            // Data RFO.
+            $rfoTexts = [];
+
+            foreach ($item['rfos'] ?? [] as $rfo) {
+                $rfoNumber = $rfo['rfo_number'] ?? 'RFO tanpa nomor';
+
+                $content = trim($rfo['content'] ?? '');
+
+                $createdAt = !empty($rfo['created_at'])
+                    ? $this->formatDate($rfo['created_at'])
+                    : '-';
+
+                $rfoTexts[] = implode("\n", [
+                    'Nomor: ' . $rfoNumber,
+                    'Dibuat: ' . $createdAt,
+                    'Isi RFO:',
+                    $content ?: '-',
+                ]);
+            }
+
+            // Gabungkan seluruh riwayat RFO dalam satu sel.
+            $rfoText = !empty($rfoTexts)
+                ? implode("\n\n------------------------------\n\n", $rfoTexts)
+                : 'Belum ada RFO';
+
             $reportedAt = $item['reported_at'] ?? null;
             $resolvedAt = $item['resolved_at'] ?? null;
 
             $rows[] = [
                 $this->safeText($item['ticket_number'] ?? '-'),
+
                 isset($item['incident_number'])
                     ? '#' . $item['incident_number']
                     : '-',
+
                 $this->safeText($item['ticket_status'] ?? '-'),
-                $this->safeText($item['category_name'] ?? 'Tanpa kategori'),
-                $this->safeText(implode('; ', $sites)),
+
+                $this->safeText(
+                    $item['category_name'] ?? 'Tanpa kategori'
+                ),
+
+                $this->safeText(
+                    implode('; ', $sites)
+                ),
+
                 $this->formatDate($reportedAt),
+
                 $this->formatDate($resolvedAt),
-                $this->formatDuration($item['duration_seconds'] ?? 0),
+
+                $this->formatDuration(
+                    $item['duration_seconds'] ?? 0
+                ),
+
+                $this->safeText($rfoText),
             ];
         }
 
         return $rows;
     }
-
     private function formatDuration(int|float|string|null $seconds): string
     {
         $remaining = max(0, (int) ($seconds ?? 0));

@@ -46,11 +46,11 @@ class TicketIncident extends Model
     /**
      * RFO untuk incident.
      */
-    public function rfos(): HasMany
-    {
-        return $this->hasMany(
-            Rfo::class,
-            'ticket_incident_id'
-        );
-    }
+    // public function rfos(): HasMany
+    // {
+    //     return $this->hasMany(
+    //         Rfo::class,
+    //         'ticket_incident_id'
+    //     );
+    // }
 }

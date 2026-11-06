@@ -72,6 +72,7 @@ interface Incident {
     resolved_at?: string | null;
     duration_seconds: number;
     sites: IncidentSiteValue[];
+    rfos?: RfoDetail[];
 }
 
 interface PaginationLink {
@@ -96,7 +97,12 @@ interface ChartPoint {
     date: string;
     incident_count: number;
 }
-
+interface RfoDetail {
+    id: number;
+    rfo_number: string;
+    content: string;
+    created_at: string | null;
+}
 const props = defineProps<{
     filters: Filters;
     summary: Summary;
@@ -106,7 +112,15 @@ const props = defineProps<{
     instansiRanking: InstansiRanking[];
     incidents: PaginatedIncidents;
 }>();
+const selectedRfoIncident = ref<Incident | null>(null);
 
+function openRfoModal(item: Incident) {
+    selectedRfoIncident.value = item;
+}
+
+function closeRfoModal() {
+    selectedRfoIncident.value = null;
+}
 const monthNames = [
     'Januari',
     'Februari',
@@ -655,7 +669,7 @@ const hasTrendData = computed(() =>
                                 Insiden
                             </th>
                             <th class="px-5 py-3 text-right font-medium">
-                                Durasi
+                                Durasi Penanganan
                             </th>
                         </tr>
                     </thead>
@@ -829,6 +843,9 @@ const hasTrendData = computed(() =>
                             <th class="px-5 py-3 font-medium">
                                 Durasi Penanganan
                             </th>
+                            <th class="px-5 py-3 font-medium">
+                                RFO / Penyebab Gangguan
+                            </th>
                         </tr>
                     </thead>
 
@@ -876,6 +893,40 @@ const hasTrendData = computed(() =>
                                 class="px-5 py-3 whitespace-nowrap text-muted-foreground"
                             >
                                 {{ formatDuration(item.duration_seconds) }}
+                            </td>
+                            <td class="px-5 py-3">
+                                <button
+                                    v-if="item.rfos && item.rfos.length > 0"
+                                    type="button"
+                                    @click="openRfoModal(item)"
+                                    class="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/20"
+                                >
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        width="15"
+                                        height="15"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                    >
+                                        <path
+                                            d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"
+                                        />
+                                        <circle cx="12" cy="12" r="3" />
+                                    </svg>
+
+                                    Lihat RFO ({{ item.rfos.length }})
+                                </button>
+
+                                <span
+                                    v-else
+                                    class="text-xs text-muted-foreground italic"
+                                >
+                                    Belum ada RFO
+                                </span>
                             </td>
                         </tr>
 
@@ -949,5 +1000,152 @@ const hasTrendData = computed(() =>
                 </div>
             </div>
         </section>
+        <!-- Modal Detail RFO -->
+        <div
+            v-if="selectedRfoIncident"
+            class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+            @click.self="closeRfoModal"
+            @keydown.esc.window="closeRfoModal"
+        >
+            <div
+                class="relative flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-2xl"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="rfo-modal-title"
+            >
+                <!-- Header Modal -->
+                <div
+                    class="flex shrink-0 items-start justify-between gap-4 border-b border-border p-5"
+                >
+                    <div>
+                        <h2
+                            id="rfo-modal-title"
+                            class="text-lg font-semibold text-foreground"
+                        >
+                            Detail RFO
+                        </h2>
+
+                        <p class="mt-1 text-sm text-muted-foreground">
+                            Nomor Tiket:
+                            <span class="font-medium text-foreground">
+                                {{ selectedRfoIncident.ticket_number }}
+                            </span>
+
+                            <span class="mx-1">·</span>
+
+                            Insiden:
+                            <span class="font-medium text-foreground">
+                                #{{
+                                    selectedRfoIncident.incident_number ?? '-'
+                                }}
+                            </span>
+                        </p>
+                    </div>
+
+                    <button
+                        type="button"
+                        @click="closeRfoModal"
+                        aria-label="Tutup modal"
+                        class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="19"
+                            height="19"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path d="M18 6 6 18" />
+                            <path d="m6 6 12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Isi Modal -->
+                <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+                    <div
+                        v-if="selectedRfoIncident.rfos?.length"
+                        v-for="rfo in selectedRfoIncident.rfos"
+                        :key="rfo.id"
+                        class="overflow-hidden rounded-xl border border-border"
+                    >
+                        <!-- RFO Header -->
+                        <div
+                            class="flex flex-col gap-2 border-b border-border bg-muted/50 p-4 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                            <div>
+                                <p class="text-xs text-muted-foreground">
+                                    Nomor RFO
+                                </p>
+
+                                <p class="mt-1 font-semibold text-foreground">
+                                    {{ rfo.rfo_number }}
+                                </p>
+                            </div>
+
+                            <div class="text-left sm:text-right">
+                                <p class="text-xs text-muted-foreground">
+                                    Dibuat pada
+                                </p>
+
+                                <p class="mt-1 text-sm text-foreground">
+                                    {{
+                                        rfo.created_at
+                                            ? formatDate(rfo.created_at)
+                                            : '-'
+                                    }}
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- RFO Content -->
+                        <div class="p-4">
+                            <p
+                                class="mb-2 text-xs font-medium text-muted-foreground"
+                            >
+                                Isi RFO / Penyebab Gangguan
+                            </p>
+
+                            <div
+                                class="text-sm leading-relaxed break-words whitespace-pre-wrap text-foreground"
+                            >
+                                {{ rfo.content }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Belum Ada RFO -->
+                    <div
+                        v-else
+                        class="flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-border p-6 text-center"
+                    >
+                        <p class="text-sm font-medium text-foreground">
+                            Belum ada RFO
+                        </p>
+
+                        <p class="mt-1 text-xs text-muted-foreground">
+                            Tiket ini belum memiliki riwayat RFO.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Footer Modal -->
+                <div
+                    class="flex shrink-0 justify-end border-t border-border p-4"
+                >
+                    <button
+                        type="button"
+                        @click="closeRfoModal"
+                        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                    >
+                        Tutup
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 </template>

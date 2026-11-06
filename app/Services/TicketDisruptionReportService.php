@@ -122,7 +122,29 @@ class TicketDisruptionReportService
             ->orderBy('ti.reported_at')
             ->orderBy('ti.id')
             ->get();
+        // Ambil seluruh RFO dari tiket yang masuk periode laporan.
+        // Query terpisah agar tidak menggandakan baris insiden.
+        $ticketIds = $rows
+            ->pluck('ticket_id')
+            ->unique()
+            ->values()
+            ->all();
 
+        $rfosByTicket = collect();
+
+        if (!empty($ticketIds)) {
+            $rfosByTicket = DB::table('rfos')
+                ->whereIn('ticket_id', $ticketIds)
+                ->orderBy('created_at')
+                ->get([
+                    'id',
+                    'ticket_id',
+                    'rfo_number',
+                    'content',
+                    'created_at',
+                ])
+                ->groupBy(fn($rfo) => (int) $rfo->ticket_id);
+        }
         /*
          * Tempat pengelompokan data.
          */
@@ -312,9 +334,19 @@ class TicketDisruptionReportService
                     'duration_seconds' => $durationSeconds,
 
                     'sites' => [],
+                    'rfos' => [],
+
                 ];
             }
-
+            // Ambil seluruh riwayat RFO milik tiket.
+            foreach ($rfosByTicket->get($ticketId, collect()) as $rfo) {
+                $incidentGroups[$incidentId]['rfos'][(int) $rfo->id] = [
+                    'id' => (int) $rfo->id,
+                    'rfo_number' => $rfo->rfo_number,
+                    'content' => $rfo->content,
+                    'created_at' => $rfo->created_at,
+                ];
+            }
             $incidentGroups[$incidentId]['sites'][$siteKey] = [
                 'site_name' => $siteName,
                 'no_jaringan' => $noJaringan,
@@ -429,6 +461,9 @@ class TicketDisruptionReportService
         foreach ($incidentDetails as &$incident) {
             $incident['sites'] = array_values(
                 $incident['sites']
+            );
+            $incident['rfos'] = array_values(
+                $incident['rfos'] ?? []
             );
         }
 

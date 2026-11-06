@@ -23,6 +23,8 @@ class TicketDisruptionArraySheet implements
         protected array $widths = [],
         protected bool $autoFilter = true,
         protected string $freezeAt = 'A2',
+        protected array $wrapTextColumns = [],
+        protected bool $autoHeight = false,
     ) {}
 
     public function array(): array
@@ -52,7 +54,23 @@ class TicketDisruptionArraySheet implements
             ->setVertical(Alignment::VERTICAL_CENTER);
 
         $sheet->getDefaultRowDimension()->setRowHeight(21);
+        // Wrap text pada kolom tertentu.
+        foreach ($this->wrapTextColumns as $column) {
+            if ($lastRow >= 2) {
+                $sheet->getStyle(
+                    "{$column}2:{$column}{$lastRow}"
+                )->getAlignment()
+                    ->setWrapText(true)
+                    ->setVertical(Alignment::VERTICAL_TOP);
+            }
+        }
 
+        // Sesuaikan tinggi baris dengan isi teks.
+        if ($this->autoHeight) {
+            for ($row = 2; $row <= $lastRow; $row++) {
+                $sheet->getRowDimension($row)->setRowHeight(-1);
+            }
+        }
         // Styling header.
         foreach ($this->headerRows as $row) {
             if ($row > $lastRow) {
