@@ -366,7 +366,7 @@ const hasTrendData = computed(() =>
                         <path d="M8 17h8" />
                     </svg>
 
-                    Export PDF
+                    Export PDFD
                 </a>
             </div>
         </div>
