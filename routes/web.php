@@ -55,6 +55,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
             Route::put('/{ticket}', [TicketController::class, 'update'])
                 ->name('update');
+            Route::post('/{ticket}/participants', [
+                TicketController::class,
+                'addParticipant',
+            ])->name('participants.store');
+            Route::post('/{ticket}/handover', [
+                TicketController::class,
+                'handover',
+            ])->name('handover');
             Route::delete('/{ticket}', [TicketController::class, 'destroy'])
                 ->name('destroy');
             Route::post('/{ticket}/updates', [

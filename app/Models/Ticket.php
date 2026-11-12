@@ -265,4 +265,49 @@ class Ticket extends Model
                 ->count(),
         ];
     }
+
+
+    /**
+     * Riwayat assignment PIC.
+     */
+    public function assignments(): HasMany
+    {
+        return $this->hasMany(
+            TicketAssignment::class,
+            'ticket_id'
+        );
+    }
+
+    /**
+     * PIC yang sedang aktif.
+     */
+    public function activeAssignment(): HasOne
+    {
+        return $this->hasOne(
+            TicketAssignment::class,
+            'ticket_id'
+        )->whereNull('ended_at');
+    }
+
+    /**
+     * Riwayat participant.
+     */
+    public function participants(): HasMany
+    {
+        return $this->hasMany(
+            TicketParticipant::class,
+            'ticket_id'
+        );
+    }
+
+    /**
+     * Participant yang masih aktif.
+     */
+    public function activeParticipants(): HasMany
+    {
+        return $this->hasMany(
+            TicketParticipant::class,
+            'ticket_id'
+        )->whereNull('left_at');
+    }
 }

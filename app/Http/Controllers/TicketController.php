@@ -17,6 +17,7 @@ use App\Models\Rfo;
 use App\Models\Ticket;
 use App\Models\TicketCategory;
 use App\Models\TicketIncident;
+use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -419,50 +420,25 @@ class TicketController extends Controller
     /**
      * Simpan ticket baru.
      */
+
     public function store(Request $request)
     {
         /*
     |--------------------------------------------------------------------------
-    | VALIDASI
+    | 1. VALIDASI INPUT
     |--------------------------------------------------------------------------
     */
 
         $validated = $request->validate([
-
-            /*
-        |--------------------------------------------------------------------------
-        | TICKET TYPE
-        |--------------------------------------------------------------------------
-        */
-
             'ticket_type' => [
                 'required',
                 'in:individual,gamas',
             ],
 
-            /*
-        |--------------------------------------------------------------------------
-        | SUMBER CUSTOMER
-        |--------------------------------------------------------------------------
-        |
-        | online_billing = customer/site sudah ada di Online Billing.
-        | manual          = customer/site belum masuk Online Billing.
-        |
-        */
-
             'customer_source' => [
                 'required',
                 'in:online_billing,manual',
             ],
-
-            /*
-        |--------------------------------------------------------------------------
-        | ONLINE BILLING
-        |--------------------------------------------------------------------------
-        |
-        | Hanya digunakan jika customer_source = online_billing.
-        |
-        */
 
             'online_billing_ids' => [
                 'exclude_unless:customer_source,online_billing',
@@ -478,15 +454,6 @@ class TicketController extends Controller
                 'exists:online_billings,id',
             ],
 
-            /*
-        |--------------------------------------------------------------------------
-        | CUSTOMER MANUAL
-        |--------------------------------------------------------------------------
-        |
-        | Customer dipilih dari Master Pelanggan.
-        |
-        */
-
             'pelanggan_id' => [
                 'required_if:customer_source,manual',
                 'nullable',
@@ -494,35 +461,11 @@ class TicketController extends Controller
                 'exists:pelanggans,id',
             ],
 
-            /*
-        |--------------------------------------------------------------------------
-        | CUSTOMER NAME
-        |--------------------------------------------------------------------------
-        |
-        | Tidak lagi menjadi sumber utama customer.
-        | Nama customer akan diambil dari Master Pelanggan
-        | berdasarkan pelanggan_id.
-        |
-        */
-
             'customer_name' => [
                 'nullable',
                 'string',
                 'max:255',
             ],
-
-            /*
-        |--------------------------------------------------------------------------
-        | MANUAL SITES
-        |--------------------------------------------------------------------------
-        |
-        | Individual:
-        |   1 site.
-        |
-        | GAMAS:
-        |   dapat memiliki banyak site.
-        |
-        */
 
             'manual_sites' => [
                 'exclude_unless:customer_source,manual',
@@ -542,12 +485,6 @@ class TicketController extends Controller
                 'string',
                 'max:255',
             ],
-
-            /*
-        |--------------------------------------------------------------------------
-        | INCIDENT
-        |--------------------------------------------------------------------------
-        */
 
             'kendala_id' => [
                 'required',
@@ -603,11 +540,8 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | VALIDASI JUMLAH SITE MANUAL UNTUK INDIVIDUAL
+    | 2. VALIDASI JUMLAH SITE UNTUK TICKET INDIVIDUAL
     |--------------------------------------------------------------------------
-    |
-    | Individual hanya boleh mempunyai 1 site.
-    |
     */
 
         if (
@@ -625,11 +559,28 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | AMBIL CUSTOMER DARI MASTER PELANGGAN
+    | 3. VALIDASI PEMBUAT TIKET
     |--------------------------------------------------------------------------
     |
-    | Hanya dilakukan jika customer_source = manual.
+    | Pembuat tiket otomatis menjadi PIC awal.
+    | Hanya staf ticketing aktif yang boleh membuat tiket.
     |
+    */
+
+        $creator = Auth::user();
+
+        if (
+            !$creator ||
+            $creator->status !== 'active' ||
+            !$creator->is_ticketing_staff
+        ) {
+            abort(403, 'Hanya staf ticketing aktif yang dapat membuat tiket.');
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | 4. AMBIL CUSTOMER DARI MASTER PELANGGAN
+    |--------------------------------------------------------------------------
     */
 
         $pelanggan = null;
@@ -642,17 +593,13 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | AMBIL ONLINE BILLING
+    | 5. AMBIL ONLINE BILLING
     |--------------------------------------------------------------------------
-    |
-    | Hanya dijalankan jika customer berasal dari Online Billing.
-    |
     */
 
         $onlineBillings = collect();
 
         if ($validated['customer_source'] === 'online_billing') {
-
             $onlineBillings = OnlineBilling::query()
                 ->with('pelanggan')
                 ->where('status', 'active')
@@ -661,12 +608,6 @@ class TicketController extends Controller
                     $validated['online_billing_ids']
                 )
                 ->get();
-
-            /*
-        |--------------------------------------------------------------------------
-        | Pastikan semua Online Billing valid dan aktif
-        |--------------------------------------------------------------------------
-        */
 
             if (
                 $onlineBillings->count() !==
@@ -683,7 +624,7 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | INDIVIDUAL HANYA BOLEH 1 SITE
+    | 6. INDIVIDUAL HANYA BOLEH 1 SITE
     |--------------------------------------------------------------------------
     */
 
@@ -702,29 +643,18 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | GAMAS + ONLINE BILLING
+    | 7. GAMAS HANYA BOLEH 1 CUSTOMER
     |--------------------------------------------------------------------------
-    |
-    | Satu GAMAS hanya boleh mempunyai satu customer,
-    | tetapi dapat mempunyai banyak site.
-    |
     */
 
         if (
             $validated['ticket_type'] === 'gamas' &&
             $validated['customer_source'] === 'online_billing'
         ) {
-
             $customerIds = $onlineBillings
                 ->pluck('pelanggan_id')
                 ->filter()
                 ->unique();
-
-            /*
-        |--------------------------------------------------------------------------
-        | Semua site GAMAS harus berasal dari customer yang sama
-        |--------------------------------------------------------------------------
-        */
 
             if ($customerIds->count() !== 1) {
                 return back()
@@ -738,31 +668,24 @@ class TicketController extends Controller
 
         /*
     |--------------------------------------------------------------------------
-    | BUAT TICKET
+    | 8. BUAT TICKET, PIC AWAL, DAN PESERTA AWAL
     |--------------------------------------------------------------------------
     */
 
         $ticket = DB::transaction(function () use (
             $validated,
             $onlineBillings,
-            $pelanggan
+            $pelanggan,
+            $creator
         ) {
-
-
-
             /*
-|--------------------------------------------------------------------------
-| Generate nomor ticket
-|--------------------------------------------------------------------------
-| Format:
-| DDMMYY.NNN
-|
-| Contoh:
-| 170926.001
-| 170926.002
-| 170926.003
-|--------------------------------------------------------------------------
-*/
+        |--------------------------------------------------------------------------
+        | GENERATE NOMOR TICKET
+        |--------------------------------------------------------------------------
+        |
+        | Format: DDMMYY.NNN
+        |
+        */
 
             $today = now();
 
@@ -774,7 +697,10 @@ class TicketController extends Controller
                 ->first();
 
             if ($lastTicket) {
-                $lastSequence = (int) explode('.', $lastTicket->ticket_number)[1];
+                $lastSequence = (int) explode(
+                    '.',
+                    $lastTicket->ticket_number
+                )[1];
 
                 $sequence = $lastSequence + 1;
             } else {
@@ -790,135 +716,103 @@ class TicketController extends Controller
 
             /*
         |--------------------------------------------------------------------------
-        | 1. CREATE TICKET
+        | 8.1 CREATE TICKET
         |--------------------------------------------------------------------------
         */
 
             $ticket = Ticket::create([
-                'ticket_number' =>
-                $ticketNumber,
-
-                'ticket_type' =>
-                $validated['ticket_type'],
-
-                'description' =>
-                $validated['description'],
-
-                'priority' =>
-                $validated['priority'],
-
-                'status' =>
-                'open',
-
-                'created_by' =>
-                Auth::id(),
-
-                'reported_at' =>
-                $validated['reported_at'],
+                'ticket_number' => $ticketNumber,
+                'ticket_type' => $validated['ticket_type'],
+                'description' => $validated['description'],
+                'priority' => $validated['priority'],
+                'status' => 'open',
+                'created_by' => $creator->id,
+                'reported_at' => $validated['reported_at'],
             ]);
 
             /*
         |--------------------------------------------------------------------------
-        | 2. CREATE CUSTOMER / SITE
+        | 8.2 PIC AWAL
+        |--------------------------------------------------------------------------
+        |
+        | Pembuat tiket otomatis menjadi PIC pertama.
+        |
+        */
+
+            $ticket->assignments()->create([
+                'user_id' => $creator->id,
+                'assigned_by' => $creator->id,
+                'assigned_at' => now(),
+            ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | 8.3 PESERTA AWAL
+        |--------------------------------------------------------------------------
+        |
+        | PIC awal juga otomatis menjadi peserta.
+        |
+        */
+
+            $ticket->participants()->create([
+                'user_id' => $creator->id,
+                'added_by' => $creator->id,
+                'joined_at' => now(),
+                'notes' => 'PIC awal saat tiket dibuat.',
+            ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | 8.4 CREATE CUSTOMER / SITE
         |--------------------------------------------------------------------------
         */
 
             if ($validated['customer_source'] === 'online_billing') {
 
-                /*
-            |--------------------------------------------------------------------------
-            | CUSTOMER DARI ONLINE BILLING
-            |--------------------------------------------------------------------------
-            */
+                // Customer berasal dari Online Billing.
 
                 foreach ($onlineBillings as $onlineBilling) {
-
                     $ticket->customers()->create([
-                        /*
-                     * Customer ID dari Online Billing.
-                     */
                         'pelanggan_id' =>
                         $onlineBilling->pelanggan_id,
 
-                        /*
-                     * Referensi Online Billing.
-                     */
                         'online_billing_id' =>
                         $onlineBilling->id,
 
-                        /*
-                     * Snapshot nama customer.
-                     */
                         'customer_name' =>
                         $onlineBilling->pelanggan?->nama_pelanggan,
 
-                        /*
-                     * Snapshot site.
-                     */
                         'site_name' =>
                         $onlineBilling->nama_site,
 
-                        /*
-                     * Snapshot no jaringan.
-                     */
                         'no_jaringan' =>
                         $onlineBilling->no_jaringan,
 
-                        /*
-                     * Media/tempat customer melaporkan.
-                     */
                         'reported_via' =>
                         $validated['reported_via'] ?? null,
                     ]);
                 }
             } else {
 
-                /*
-            |--------------------------------------------------------------------------
-            | CUSTOMER MANUAL
-            |--------------------------------------------------------------------------
-            |
-            | Customer berasal dari Master Pelanggan.
-            |
-            */
+                // Customer berasal dari Master Pelanggan.
 
                 foreach ($validated['manual_sites'] as $site) {
-
                     $ticket->customers()->create([
-
-                        /*
-                     * ID customer sebenarnya.
-                     */
                         'pelanggan_id' =>
                         $pelanggan->id,
 
-                        /*
-                     * Belum ada Online Billing.
-                     */
                         'online_billing_id' =>
                         null,
 
-                        /*
-                     * Snapshot nama customer.
-                     */
                         'customer_name' =>
                         $pelanggan->nama_pelanggan,
 
-                        /*
-                     * Nama site manual.
-                     */
                         'site_name' =>
                         $site['site_name'],
 
-                        /*
-                     * No jaringan manual.
-                     */
                         'no_jaringan' =>
                         $site['no_jaringan'] ?? null,
 
-                        /*
-                     * Media/tempat customer melaporkan.
-                     */
                         'reported_via' =>
                         $validated['reported_via'] ?? null,
                     ]);
@@ -927,14 +821,12 @@ class TicketController extends Controller
 
             /*
         |--------------------------------------------------------------------------
-        | 3. CREATE INCIDENT PERTAMA
+        | 8.5 CREATE INCIDENT PERTAMA
         |--------------------------------------------------------------------------
         */
 
             $ticket->incidents()->create([
-
-                'incident_number' =>
-                1,
+                'incident_number' => 1,
 
                 'kendala_id' =>
                 $validated['kendala_id'],
@@ -952,27 +844,23 @@ class TicketController extends Controller
 
             /*
         |--------------------------------------------------------------------------
-        | 4. HISTORY AWAL TICKET
+        | 8.6 HISTORY AWAL TICKET
         |--------------------------------------------------------------------------
         */
 
             $ticket->updates()->create([
-
-                'user_id' =>
-                Auth::id(),
-
-                'message' =>
-                'Ticket dibuat.',
+                'user_id' => $creator->id,
+                'message' => 'Ticket dibuat.',
             ]);
-
-            /*
-        |--------------------------------------------------------------------------
-        | RETURN TICKET
-        |--------------------------------------------------------------------------
-        */
 
             return $ticket;
         });
+
+        /*
+    |--------------------------------------------------------------------------
+    | 9. LOAD RELASI TICKET
+    |--------------------------------------------------------------------------
+    */
 
         $ticket->load([
             'creator',
@@ -980,11 +868,17 @@ class TicketController extends Controller
             'customers',
         ]);
 
+        /*
+    |--------------------------------------------------------------------------
+    | 10. DISPATCH EVENT
+    |--------------------------------------------------------------------------
+    */
+
         event(new TicketCreated($ticket));
 
         /*
     |--------------------------------------------------------------------------
-    | REDIRECT KE DETAIL TICKET
+    | 11. REDIRECT KE DETAIL TICKET
     |--------------------------------------------------------------------------
     */
 
@@ -996,6 +890,7 @@ class TicketController extends Controller
             'Ticket berhasil dibuat.'
         );
     }
+
 
     /**
      * Detail ticket.
@@ -1028,6 +923,14 @@ class TicketController extends Controller
             'rfos.creator',
             'updates.user',
             'updates.attachments',
+
+
+            // Pemilik tiket
+            'activeAssignment.user',
+            'assignments.user',
+
+            // Peserta penanganan
+            'activeParticipants.user',
         ]);
 
         /*
@@ -1135,11 +1038,44 @@ class TicketController extends Controller
     | RETURN KE INERTIA
     |--------------------------------------------------------------------------
     */
+        $ticketingStaff = User::query()
+            ->where('status', 'active')
+            ->where('is_ticketing_staff', true)
+            ->where('id', '!=', Auth::id())
+            ->orderBy('name')
+            ->get([
+                'id',
+                'name',
+            ]);
 
+        $canHandover = $ticket->activeAssignment?->user_id === Auth::id()
+            && in_array($ticket->status, ['open', 'on_progress']);
+
+        $activeParticipantIds = $ticket->activeParticipants
+            ->pluck('user_id')
+            ->all();
+
+        $availableParticipants = User::query()
+            ->where('status', 'active')
+            ->where('is_ticketing_staff', true)
+            ->whereNotIn('id', $activeParticipantIds)
+            ->orderBy('name')
+            ->get([
+                'id',
+                'name',
+            ]);
+
+        $canManageParticipants = $ticket->ticket_type === 'gamas'
+            && $ticket->activeAssignment?->user_id === Auth::id()
+            && in_array($ticket->status, ['open', 'on_progress']);
         return Inertia::render('Tickets/Show', [
             'ticket' => $ticket,
             'categories' => $categories,
             'availableSites' => $availableSites,
+            'ticketingStaff' => $ticketingStaff,
+            'availableParticipants' => $availableParticipants,
+            'canManageParticipants' => $canManageParticipants,
+            'canHandover' => $canHandover,
         ]);
     }
 
@@ -3179,5 +3115,274 @@ class TicketController extends Controller
             'tickets' => $tickets,
             'ticketStats' => Ticket::dashboardStats(),
         ]);
+    }
+
+
+    public function handover(Request $request, Ticket $ticket)
+    {
+        /*
+    |--------------------------------------------------------------------------
+    | 1. VALIDASI INPUT
+    |--------------------------------------------------------------------------
+    */
+
+        $validated = $request->validate([
+            'user_id' => [
+                'required',
+                'integer',
+                'exists:users,id',
+            ],
+
+            'handover_note' => [
+                'nullable',
+                'string',
+                'max:2000',
+            ],
+        ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | 2. VALIDASI TIKET
+    |--------------------------------------------------------------------------
+    |
+    | Handover hanya diperbolehkan untuk tiket yang masih aktif.
+    |
+    */
+
+        if (!in_array($ticket->status, ['open', 'on_progress'])) {
+            return back()->withErrors([
+                'handover' => 'Tiket yang sudah selesai tidak dapat diserahkan.',
+            ]);
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | 3. VALIDASI PEMILIK BARU
+    |--------------------------------------------------------------------------
+    */
+
+        $newOwner = \App\Models\User::query()
+            ->where('id', $validated['user_id'])
+            ->where('status', 'active')
+            ->where('is_ticketing_staff', true)
+            ->first();
+
+        if (!$newOwner) {
+            return back()->withErrors([
+                'user_id' => 'Pemilik tiket baru harus merupakan staf ticketing aktif.',
+            ]);
+        }
+
+        if ($newOwner->id === Auth::id()) {
+            return back()->withErrors([
+                'user_id' => 'Kamu sudah menjadi pemilik tiket saat ini.',
+            ]);
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | 4. PROSES HANDOVER
+    |--------------------------------------------------------------------------
+    */
+
+        DB::transaction(function () use (
+            $ticket,
+            $newOwner,
+            $validated
+        ) {
+
+            /*
+        |--------------------------------------------------------------------------
+        | LOCK TICKET
+        |--------------------------------------------------------------------------
+        |
+        | Mencegah dua proses handover berjalan bersamaan.
+        |
+        */
+
+            $lockedTicket = Ticket::query()
+                ->whereKey($ticket->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            /*
+        |--------------------------------------------------------------------------
+        | VALIDASI STATUS ULANG
+        |--------------------------------------------------------------------------
+        */
+
+            if (!in_array($lockedTicket->status, ['open', 'on_progress'])) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'handover' => 'Tiket sudah tidak dapat diserahkan.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | AMBIL PEMILIK TIKET SAAT INI
+        |--------------------------------------------------------------------------
+        */
+
+            $currentAssignment = $lockedTicket
+                ->assignments()
+                ->whereNull('ended_at')
+                ->lockForUpdate()
+                ->first();
+
+            if (!$currentAssignment) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'handover' => 'Pemilik tiket aktif tidak ditemukan.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | PASTIKAN PENGGUNA ADALAH PEMILIK SAAT INI
+        |--------------------------------------------------------------------------
+        */
+
+            if ($currentAssignment->user_id !== Auth::id()) {
+                abort(403, 'Hanya pemilik tiket saat ini yang dapat menyerahkan tiket.');
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | CEGAH MENYERAHKAN KE DIRI SENDIRI
+        |--------------------------------------------------------------------------
+        */
+
+            if ($currentAssignment->user_id === $newOwner->id) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'user_id' => 'Pemilik baru tidak boleh sama dengan pemilik saat ini.',
+                ]);
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | AKHIRI ASSIGNMENT PEMILIK LAMA
+        |--------------------------------------------------------------------------
+        */
+
+            $currentAssignment->update([
+                'ended_at' => now(),
+                'ended_by' => Auth::id(),
+                'handover_note' => $validated['handover_note'] ?? null,
+            ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | BUAT ASSIGNMENT PEMILIK BARU
+        |--------------------------------------------------------------------------
+        */
+
+            $lockedTicket->assignments()->create([
+                'user_id' => $newOwner->id,
+                'assigned_by' => Auth::id(),
+                'assigned_at' => now(),
+            ]);
+
+            /*
+        |--------------------------------------------------------------------------
+        | TAMBAHKAN SEBAGAI PESERTA JIKA BELUM AKTIF
+        |--------------------------------------------------------------------------
+        |
+        | Pemilik lama tetap menjadi peserta.
+        | Peserta yang sudah aktif tidak dibuat ulang.
+        |
+        */
+
+            $alreadyParticipant = $lockedTicket
+                ->participants()
+                ->where('user_id', $newOwner->id)
+                ->whereNull('left_at')
+                ->exists();
+
+            if (!$alreadyParticipant) {
+                $lockedTicket->participants()->create([
+                    'user_id' => $newOwner->id,
+                    'added_by' => Auth::id(),
+                    'joined_at' => now(),
+                    'notes' => 'Ditambahkan otomatis saat menjadi pemilik tiket.',
+                ]);
+            }
+        });
+
+        /*
+    |--------------------------------------------------------------------------
+    | 5. REDIRECT
+    |--------------------------------------------------------------------------
+    */
+
+        return back()->with(
+            'success',
+            'Tiket berhasil diserahkan kepada ' . $newOwner->name . '.'
+        );
+    }
+
+    public function addParticipant(Request $request, Ticket $ticket)
+    {
+        $validated = $request->validate([
+            'user_id' => ['required', 'integer', 'exists:users,id'],
+            'notes' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        DB::transaction(function () use ($ticket, $validated) {
+
+            // Lock tiket untuk mencegah perubahan bersamaan.
+            $lockedTicket = Ticket::query()
+                ->whereKey($ticket->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $lockedTicket->load('activeAssignment');
+
+            // Hanya tiket GAMAS.
+            if ($lockedTicket->ticket_type !== 'gamas') {
+                abort(422, 'Peserta tambahan hanya tersedia untuk tiket GAMAS.');
+            }
+
+            // Tiket harus masih berjalan.
+            if (!in_array($lockedTicket->status, ['open', 'on_progress'])) {
+                abort(422, 'Peserta tidak dapat ditambahkan pada tiket yang sudah selesai.');
+            }
+
+            // Hanya PIC aktif yang boleh menambahkan peserta.
+            if ($lockedTicket->activeAssignment?->user_id !== Auth::id()) {
+                abort(403, 'Hanya PIC aktif yang dapat menambahkan peserta.');
+            }
+
+            // Pastikan staf merupakan ticketing staff aktif.
+            $participant = User::query()
+                ->whereKey($validated['user_id'])
+                ->where('status', 'active')
+                ->where('is_ticketing_staff', true)
+                ->first();
+
+            if (!$participant) {
+                abort(422, 'Staf yang dipilih tidak aktif atau bukan staf ticketing.');
+            }
+
+            // Cegah participant aktif ganda.
+            $alreadyParticipant = $lockedTicket->activeParticipants()
+                ->where('user_id', $participant->id)
+                ->exists();
+
+            if ($alreadyParticipant) {
+                abort(422, 'Staf tersebut sudah menjadi peserta penanganan.');
+            }
+
+            // Tambahkan participant.
+            $lockedTicket->participants()->create([
+                'user_id' => $participant->id,
+                'added_by' => Auth::id(),
+                'joined_at' => now(),
+                'notes' => $validated['notes'] ?? 'Ditambahkan sebagai peserta penanganan.',
+            ]);
+        });
+
+        return back()->with(
+            'success',
+            'Peserta penanganan berhasil ditambahkan.'
+        );
     }
 }

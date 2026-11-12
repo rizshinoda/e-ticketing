@@ -1,17 +1,13 @@
 <script setup lang="ts">
-import { Link, useForm, usePage, router } from '@inertiajs/vue3';
-import { computed, ref, watch } from 'vue';
-import Swal from 'sweetalert2';
+import { Link, useForm, router } from '@inertiajs/vue3';
+import { computed, ref } from 'vue';
 import {
     confirmAction,
     showSuccessToast,
     showErrorToast,
 } from '@/lib/sla-notifications';
-/*
-|--------------------------------------------------------------------------
-| Interfaces
-|--------------------------------------------------------------------------
-*/
+
+/* ---------- Interfaces ---------- */
 
 interface User {
     id: number;
@@ -48,7 +44,6 @@ interface Incident {
     incident_number: number;
     reported_at: string;
     resolved_at: string | null;
-
     category: Category;
 }
 
@@ -79,7 +74,27 @@ interface Update {
     attachments: Attachment[];
 }
 
+interface TicketAssignment {
+    id: number;
+    user_id: number;
+    assigned_at: string;
+    ended_at: string | null;
+    handover_note: string | null;
+    user: User;
+}
+
+interface TicketParticipant {
+    id: number;
+    user_id: number;
+    joined_at: string;
+    left_at: string | null;
+    notes: string | null;
+    user: User;
+}
+
 interface Ticket {
+    active_participants: TicketParticipant[];
+    active_assignment: TicketAssignment | null;
     id: number;
     ticket_number: string;
     ticket_type: 'individual' | 'gamas';
@@ -100,18 +115,66 @@ interface Ticket {
     stop_clocks: StopClock[];
     rfos: Rfo[];
     updates: Update[];
+    assignments: TicketAssignment[];
+    participants: TicketParticipant[];
 }
+
 interface AvailableSite {
     id: number;
     pelanggan_id: number;
     nama_site: string | null;
     no_jaringan: string | null;
 }
-/*
-|--------------------------------------------------------------------------
-| Props
-|--------------------------------------------------------------------------
-*/
+
+/* ---------- Props ---------- */
+
+const props = defineProps<{
+    ticket: Ticket;
+    categories: Category[];
+    availableSites: AvailableSite[];
+    ticketingStaff: User[];
+    canHandover: boolean;
+    availableParticipants: User[];
+    canManageParticipants: boolean;
+}>();
+
+/* ---------- UI helpers (tab & gaya berulang) ---------- */
+
+const activeTab = ref<'overview' | 'activity' | 'sla'>('overview');
+
+const tabs = computed(() => [
+    {
+        key: 'overview' as const,
+        label: 'Ringkasan',
+        count: props.ticket.customers.length,
+    },
+    {
+        key: 'activity' as const,
+        label: 'Aktivitas',
+        count: props.ticket.updates.length,
+    },
+    {
+        key: 'sla' as const,
+        label: 'Stop Clock & RFO',
+        count: props.ticket.rfos.length,
+    },
+]);
+
+const ui = {
+    card: 'rounded-xl border bg-card p-5 shadow-sm',
+    title: 'text-base font-semibold',
+    label: 'mb-1.5 block text-sm font-medium',
+    input: 'w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none',
+    primary:
+        'rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:opacity-50',
+    ghost: 'rounded-lg border bg-background px-4 py-2 text-sm transition hover:bg-muted disabled:opacity-50',
+    muted: 'text-xs text-muted-foreground',
+    error: 'mt-1 text-sm text-destructive',
+    panel: 'rounded-lg border bg-muted/30 p-4',
+};
+
+/* ---------- Grouped customers ---------- */
+
 const groupedCustomers = computed(() => {
     const groups: Record<string, Customer[]> = {};
 
@@ -131,35 +194,139 @@ const groupedCustomers = computed(() => {
         sites,
     }));
 });
-const props = defineProps<{
-    ticket: Ticket;
-    categories: Category[];
-    availableSites: AvailableSite[];
-}>();
-const page = usePage<{
-    flash: {
-        success?: string;
-    };
-    errors: {
-        stop_clock?: string;
-        resolve?: string;
-        close?: string;
-    };
-}>();
+
+/* ---------- Handover ---------- */
+
+const showHandoverForm = ref(false);
+
+const handoverForm = useForm<{
+    user_id: number | null;
+    handover_note: string;
+}>({
+    user_id: null,
+    handover_note: '',
+});
+
+const handoverHistory = computed(() => {
+    return [...(props.ticket.assignments || [])].sort(
+        (a, b) =>
+            new Date(b.assigned_at).getTime() -
+            new Date(a.assigned_at).getTime(),
+    );
+});
+
+const submitHandover = async () => {
+    if (!handoverForm.user_id) {
+        handoverForm.setError('user_id', 'Pilih pemilik tiket baru.');
+        return;
+    }
+
+    const selectedStaff = props.ticketingStaff.find(
+        (staff) => staff.id === handoverForm.user_id,
+    );
+
+    const confirmed = await confirmAction({
+        title: 'Serahkan Tiket?',
+        text: `Tiket akan diserahkan kepada ${selectedStaff?.name || 'staf yang dipilih'}.`,
+        icon: 'question',
+        confirmButtonText: 'Ya, Serahkan',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) {
+        return;
+    }
+
+    handoverForm.post(`/tickets/${props.ticket.id}/handover`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            handoverForm.reset();
+            showHandoverForm.value = false;
+
+            showSuccessToast('Tiket berhasil diserahkan kepada pemilik baru.');
+        },
+
+        onError: (errors) => {
+            console.error('HANDOVER ERROR:', errors);
+
+            showErrorToast(
+                'Tiket gagal diserahkan. Periksa kembali data yang dimasukkan.',
+            );
+        },
+    });
+};
+
+/* ---------- Participants ---------- */
+
+const showParticipantForm = ref(false);
+
+const participantForm = useForm<{
+    user_id: number | null;
+    notes: string;
+}>({
+    user_id: null,
+    notes: '',
+});
+
+const submitParticipant = async () => {
+    if (!participantForm.user_id) {
+        participantForm.setError(
+            'user_id',
+            'Pilih staf yang akan ditambahkan.',
+        );
+        return;
+    }
+
+    const selectedStaff = props.availableParticipants.find(
+        (staff) => staff.id === participantForm.user_id,
+    );
+
+    const confirmed = await confirmAction({
+        title: 'Tambah Peserta?',
+        text: `${selectedStaff?.name || 'Staf yang dipilih'} akan ditambahkan sebagai peserta penanganan.`,
+        icon: 'question',
+        confirmButtonText: 'Ya, Tambah',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) return;
+
+    participantForm.post(`/tickets/${props.ticket.id}/participants`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            participantForm.reset();
+            showParticipantForm.value = false;
+
+            showSuccessToast('Peserta penanganan berhasil ditambahkan.');
+        },
+
+        onError: (errors) => {
+            console.error('ADD PARTICIPANT ERROR:', errors);
+
+            showErrorToast(
+                'Peserta gagal ditambahkan. Periksa kembali data yang dimasukkan.',
+            );
+        },
+    });
+};
+
+/* ---------- Sites ---------- */
+
 const showAddSiteForm = ref(false);
 
 const addSiteForm = useForm({
     source: 'online_billing' as 'online_billing' | 'manual',
-
     online_billing_id: null as number | null,
-
     site_name: '',
-
     no_jaringan: '',
     reported_via: '',
 });
+
 const siteSearch = ref('');
 const showSiteResults = ref(false);
+
 const filteredSites = computed(() => {
     const search = siteSearch.value.toLowerCase().trim();
 
@@ -174,26 +341,20 @@ const filteredSites = computed(() => {
         );
     });
 });
+
 const selectSite = (site: AvailableSite) => {
     addSiteForm.online_billing_id = site.id;
-
     addSiteForm.site_name = '';
-
     addSiteForm.no_jaringan = '';
-
     siteSearch.value = `${site.nama_site || '-'} - ${site.no_jaringan || '-'}`;
-
     showSiteResults.value = false;
 };
+
 const openAddSiteForm = () => {
     addSiteForm.reset();
-
     addSiteForm.source = 'online_billing';
-
     siteSearch.value = '';
-
     showSiteResults.value = false;
-
     showAddSiteForm.value = true;
 };
 
@@ -203,6 +364,7 @@ const cancelAddSiteForm = () => {
     showSiteResults.value = false;
     showAddSiteForm.value = false;
 };
+
 const submitAddSite = async () => {
     if (
         addSiteForm.source === 'online_billing' &&
@@ -220,7 +382,6 @@ const submitAddSite = async () => {
             ? siteSearch.value || '-'
             : addSiteForm.site_name;
 
-    // Konfirmasi sebelum menambahkan site.
     const confirmed = await confirmAction({
         title: 'Tambah Site?',
         text: `Site "${siteName}" akan ditambahkan ke ticket GAMAS.`,
@@ -256,7 +417,8 @@ const submitAddSite = async () => {
         },
     });
 };
-const removeSite = async (customer: any) => {
+
+const removeSite = async (customer: Customer) => {
     const confirmed = await confirmAction({
         title: 'Lepas Site?',
         text: `Site "${customer.site_name || '-'}" akan dilepas dari ticket ini.`,
@@ -283,11 +445,8 @@ const removeSite = async (customer: any) => {
         },
     });
 };
-/*
-|--------------------------------------------------------------------------
-| Format Date
-|--------------------------------------------------------------------------
-*/
+
+/* ---------- Formatters ---------- */
 
 const formatDate = (date: string | null) => {
     if (!date) {
@@ -300,12 +459,6 @@ const formatDate = (date: string | null) => {
     });
 };
 
-/*
-|--------------------------------------------------------------------------
-| Status Label
-|--------------------------------------------------------------------------
-*/
-
 const statusLabel = (status: string) => {
     const labels: Record<string, string> = {
         open: 'Open',
@@ -316,12 +469,6 @@ const statusLabel = (status: string) => {
 
     return labels[status] ?? status;
 };
-
-/*
-|--------------------------------------------------------------------------
-| Priority Label
-|--------------------------------------------------------------------------
-*/
 
 const priorityLabel = (priority: string) => {
     const labels: Record<string, string> = {
@@ -334,53 +481,29 @@ const priorityLabel = (priority: string) => {
     return labels[priority] ?? priority;
 };
 
-/*
-|--------------------------------------------------------------------------
-| Priority Class
-|--------------------------------------------------------------------------
-*/
-
 const priorityClass = (priority: string) => {
     const classes: Record<string, string> = {
         low: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
-
         medium: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300',
-
         high: 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300',
-
         critical: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300',
     };
 
     return classes[priority] ?? 'bg-muted text-muted-foreground';
 };
 
-/*
-|--------------------------------------------------------------------------
-| Status Class
-|--------------------------------------------------------------------------
-*/
-
 const statusClass = (status: string) => {
     const classes: Record<string, string> = {
         open: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
-
         on_progress:
             'bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300',
-
         resolved:
             'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300',
-
         closed: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
     };
 
     return classes[status] ?? 'bg-muted text-muted-foreground';
 };
-
-/*
-|--------------------------------------------------------------------------
-| Format Downtime
-|--------------------------------------------------------------------------
-*/
 
 const formatDowntime = (minutes: number | null) => {
     if (minutes === null) {
@@ -388,7 +511,6 @@ const formatDowntime = (minutes: number | null) => {
     }
 
     const hours = Math.floor(minutes / 60);
-
     const remainingMinutes = minutes % 60;
 
     if (hours === 0) {
@@ -398,11 +520,7 @@ const formatDowntime = (minutes: number | null) => {
     return `${hours} jam ${remainingMinutes} menit`;
 };
 
-/*
-|--------------------------------------------------------------------------
-| Update Form
-|--------------------------------------------------------------------------
-*/
+/* ---------- Update (progress) ---------- */
 
 const updateForm = useForm<{
     message: string;
@@ -411,92 +529,6 @@ const updateForm = useForm<{
     message: '',
     attachments: [],
 });
-const rfoForm = useForm({
-    content: '',
-});
-const showRfoForm = ref(false);
-const submitRfo = async () => {
-    const confirmed = await confirmAction({
-        title: 'Buat RFO?',
-        text: 'RFO akan disimpan pada ticket ini.',
-        icon: 'question',
-        confirmButtonText: 'Ya, Simpan',
-        cancelButtonText: 'Batal',
-    });
-
-    if (!confirmed) {
-        return;
-    }
-
-    rfoForm.post(`/tickets/${props.ticket.id}/rfo`, {
-        preserveScroll: true,
-
-        onSuccess: () => {
-            rfoForm.reset();
-            showRfoForm.value = false;
-
-            showSuccessToast('RFO berhasil dibuat.');
-        },
-
-        onError: (errors) => {
-            console.error('CREATE RFO ERROR:', errors);
-
-            showErrorToast(
-                'RFO gagal dibuat. Periksa kembali data yang dimasukkan.',
-            );
-        },
-    });
-};
-const editingRfoId = ref<number | null>(null);
-
-const editRfoForm = useForm({
-    content: '',
-});
-const startEditRfo = (rfo: Rfo) => {
-    editingRfoId.value = rfo.id;
-    editRfoForm.content = rfo.content;
-};
-const cancelEditRfo = () => {
-    editingRfoId.value = null;
-    editRfoForm.reset();
-};
-const submitEditRfo = async (rfo: Rfo) => {
-    const confirmed = await confirmAction({
-        title: 'Simpan Perubahan RFO?',
-        text: 'Perubahan pada RFO akan disimpan.',
-        icon: 'question',
-        confirmButtonText: 'Ya, Simpan',
-        cancelButtonText: 'Batal',
-    });
-
-    if (!confirmed) {
-        return;
-    }
-
-    editRfoForm.put(`/tickets/${props.ticket.id}/rfo/${rfo.id}`, {
-        preserveScroll: true,
-
-        onSuccess: () => {
-            editingRfoId.value = null;
-            editRfoForm.reset();
-
-            showSuccessToast('RFO berhasil diperbarui.');
-        },
-
-        onError: (errors) => {
-            console.error('UPDATE RFO ERROR:', errors);
-
-            showErrorToast(
-                'RFO gagal diperbarui. Periksa kembali data yang dimasukkan.',
-            );
-        },
-    });
-};
-/*
-|--------------------------------------------------------------------------
-| Handle Files
-|--------------------------------------------------------------------------
-*/
 
 const handleFiles = (event: Event) => {
     const target = event.target as HTMLInputElement;
@@ -507,12 +539,6 @@ const handleFiles = (event: Event) => {
 
     updateForm.attachments = Array.from(target.files);
 };
-
-/*
-|--------------------------------------------------------------------------
-| Submit Update
-|--------------------------------------------------------------------------
-*/
 
 const submitUpdate = async () => {
     const confirmed = await confirmAction({
@@ -546,11 +572,97 @@ const submitUpdate = async () => {
         },
     });
 };
-/*
-|--------------------------------------------------------------------------
-| Stop Clock Form
-|--------------------------------------------------------------------------
-*/
+
+/* ---------- RFO ---------- */
+
+const rfoForm = useForm({
+    content: '',
+});
+const showRfoForm = ref(false);
+
+const submitRfo = async () => {
+    const confirmed = await confirmAction({
+        title: 'Buat RFO?',
+        text: 'RFO akan disimpan pada ticket ini.',
+        icon: 'question',
+        confirmButtonText: 'Ya, Simpan',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) {
+        return;
+    }
+
+    rfoForm.post(`/tickets/${props.ticket.id}/rfo`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            rfoForm.reset();
+            showRfoForm.value = false;
+
+            showSuccessToast('RFO berhasil dibuat.');
+        },
+
+        onError: (errors) => {
+            console.error('CREATE RFO ERROR:', errors);
+
+            showErrorToast(
+                'RFO gagal dibuat. Periksa kembali data yang dimasukkan.',
+            );
+        },
+    });
+};
+
+const editingRfoId = ref<number | null>(null);
+
+const editRfoForm = useForm({
+    content: '',
+});
+
+const startEditRfo = (rfo: Rfo) => {
+    editingRfoId.value = rfo.id;
+    editRfoForm.content = rfo.content;
+};
+
+const cancelEditRfo = () => {
+    editingRfoId.value = null;
+    editRfoForm.reset();
+};
+
+const submitEditRfo = async (rfo: Rfo) => {
+    const confirmed = await confirmAction({
+        title: 'Simpan Perubahan RFO?',
+        text: 'Perubahan pada RFO akan disimpan.',
+        icon: 'question',
+        confirmButtonText: 'Ya, Simpan',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) {
+        return;
+    }
+
+    editRfoForm.put(`/tickets/${props.ticket.id}/rfo/${rfo.id}`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            editingRfoId.value = null;
+            editRfoForm.reset();
+
+            showSuccessToast('RFO berhasil diperbarui.');
+        },
+
+        onError: (errors) => {
+            console.error('UPDATE RFO ERROR:', errors);
+
+            showErrorToast(
+                'RFO gagal diperbarui. Periksa kembali data yang dimasukkan.',
+            );
+        },
+    });
+};
+
+/* ---------- Stop Clock ---------- */
 
 const stopClockForm = useForm<{
     reason: string;
@@ -558,6 +670,90 @@ const stopClockForm = useForm<{
     reason: '',
 });
 const showStopClockForm = ref(false);
+
+const hasActiveStopClock = () => {
+    return props.ticket.stop_clocks.some(
+        (stopClock) => stopClock.ended_at === null,
+    );
+};
+
+const cancelStopClockForm = () => {
+    stopClockForm.reset();
+};
+
+const submitStopClock = async () => {
+    if (!stopClockForm.reason.trim()) {
+        stopClockForm.setError('reason', 'Alasan Stop Clock wajib diisi.');
+        return;
+    }
+
+    stopClockForm.clearErrors();
+
+    const confirmed = await confirmAction({
+        title: 'Mulai Stop Clock?',
+        text: 'SLA ticket akan dihentikan sementara.',
+        icon: 'warning',
+        confirmButtonText: 'Ya, Mulai',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) {
+        return;
+    }
+
+    stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            stopClockForm.reset();
+
+            showSuccessToast('Stop Clock berhasil dimulai.');
+        },
+
+        onError: (errors) => {
+            console.error('START STOP CLOCK ERROR:', errors);
+
+            showErrorToast(
+                'Stop Clock gagal dimulai. Periksa kembali data yang dimasukkan.',
+            );
+        },
+    });
+};
+
+const resumeStopClock = async () => {
+    const confirmed = await confirmAction({
+        title: 'Lanjutkan SLA?',
+        text: 'Stop Clock akan dihentikan dan penghitungan SLA akan dilanjutkan.',
+        icon: 'question',
+        confirmButtonText: 'Ya, Lanjutkan',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) {
+        return;
+    }
+
+    stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock/resume`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            stopClockForm.reset();
+
+            showSuccessToast(
+                'Stop Clock berhasil dihentikan. Penghitungan SLA dilanjutkan.',
+            );
+        },
+
+        onError: (errors) => {
+            console.error('RESUME STOP CLOCK ERROR:', errors);
+
+            showErrorToast('Gagal melanjutkan SLA ticket.');
+        },
+    });
+};
+
+/* ---------- Re-Open ---------- */
+
 const showReopenForm = ref(false);
 
 const reopenForm = useForm({
@@ -607,102 +803,9 @@ const submitReopen = async () => {
         },
     });
 };
-/*
-|--------------------------------------------------------------------------
-| Cancel Stop Clock
-|--------------------------------------------------------------------------
-*/
 
-const cancelStopClockForm = () => {
-    stopClockForm.reset();
-};
+/* ---------- Resolve & Close ---------- */
 
-/*
-|--------------------------------------------------------------------------
-| Start Stop Clock
-|--------------------------------------------------------------------------
-*/
-
-const submitStopClock = async () => {
-    if (!stopClockForm.reason.trim()) {
-        stopClockForm.setError('reason', 'Alasan Stop Clock wajib diisi.');
-        return;
-    }
-
-    stopClockForm.clearErrors();
-
-    const confirmed = await confirmAction({
-        title: 'Mulai Stop Clock?',
-        text: 'SLA ticket akan dihentikan sementara.',
-        icon: 'warning',
-        confirmButtonText: 'Ya, Mulai',
-        cancelButtonText: 'Batal',
-    });
-
-    if (!confirmed) {
-        return;
-    }
-
-    stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock`, {
-        preserveScroll: true,
-
-        onSuccess: () => {
-            stopClockForm.reset();
-
-            showSuccessToast('Stop Clock berhasil dimulai.');
-        },
-
-        onError: (errors) => {
-            console.error('START STOP CLOCK ERROR:', errors);
-
-            showErrorToast(
-                'Stop Clock gagal dimulai. Periksa kembali data yang dimasukkan.',
-            );
-        },
-    });
-};
-/*
-|--------------------------------------------------------------------------
-| Resume Stop Clock
-|--------------------------------------------------------------------------
-*/
-
-const resumeStopClock = async () => {
-    const confirmed = await confirmAction({
-        title: 'Lanjutkan SLA?',
-        text: 'Stop Clock akan dihentikan dan penghitungan SLA akan dilanjutkan.',
-        icon: 'question',
-        confirmButtonText: 'Ya, Lanjutkan',
-        cancelButtonText: 'Batal',
-    });
-
-    if (!confirmed) {
-        return;
-    }
-
-    stopClockForm.post(`/tickets/${props.ticket.id}/stop-clock/resume`, {
-        preserveScroll: true,
-
-        onSuccess: () => {
-            stopClockForm.reset();
-
-            showSuccessToast(
-                'Stop Clock berhasil dihentikan. Penghitungan SLA dilanjutkan.',
-            );
-        },
-
-        onError: (errors) => {
-            console.error('RESUME STOP CLOCK ERROR:', errors);
-
-            showErrorToast('Gagal melanjutkan SLA ticket.');
-        },
-    });
-};
-/*
-|--------------------------------------------------------------------------
-| Resolve Ticket
-|--------------------------------------------------------------------------
-*/
 const showResolveForm = ref(false);
 
 const resolveForm = useForm({
@@ -749,7 +852,9 @@ const submitResolve = async () => {
         },
     });
 };
+
 const closeForm = useForm({});
+
 const closeTicket = async () => {
     const confirmed = await confirmAction({
         title: 'Close Ticket?',
@@ -777,553 +882,479 @@ const closeTicket = async () => {
         },
     });
 };
-/*
-|--------------------------------------------------------------------------
-| Check Active Stop Clock
-|--------------------------------------------------------------------------
-*/
-
-const hasActiveStopClock = () => {
-    return props.ticket.stop_clocks.some(
-        (stopClock) => stopClock.ended_at === null,
-    );
-};
-
-// const showSuccess = ref(false);
-// const showResolveError = ref(false);
-// const showCloseError = ref(false);
-// const showStopClockError = ref(false);
-// let toastTimer: ReturnType<typeof setTimeout> | null = null;
-
-// const startToastTimer = () => {
-//     if (toastTimer) {
-//         clearTimeout(toastTimer);
-//     }
-
-//     toastTimer = setTimeout(() => {
-//         showSuccess.value = false;
-//         showResolveError.value = false;
-//         showCloseError.value = false;
-//         showStopClockError.value = false;
-//     }, 3000);
-// };
-
-// watch(
-//     () => page.props.flash.success,
-//     (message) => {
-//         if (!message) {
-//             return;
-//         }
-
-//         showSuccess.value = true;
-//         startToastTimer();
-//     },
-//     { immediate: true },
-// );
-
-// watch(
-//     () => page.props.errors.resolve,
-//     (message) => {
-//         if (!message) {
-//             return;
-//         }
-
-//         showResolveError.value = true;
-//         startToastTimer();
-//     },
-//     { immediate: true },
-// );
-
-// watch(
-//     () => page.props.errors.close,
-//     (message) => {
-//         if (!message) {
-//             return;
-//         }
-
-//         showCloseError.value = true;
-//         startToastTimer();
-//     },
-//     { immediate: true },
-// );
-// watch(
-//     () => page.props.errors.stop_clock,
-//     (message) => {
-//         if (!message) {
-//             return;
-//         }
-
-//         showStopClockError.value = true;
-//         startToastTimer();
-//     },
-//     { immediate: true },
-// );
 </script>
 
 <template>
-    <!-- =====================================================
-
-         FLASH MESSAGE
-
-    ====================================================== -->
-
-    <!-- SUCCESS TOAST -->
-
-    <!-- <div
-        v-if="showSuccess && page.props.flash.success"
-        class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 shadow-lg"
-    >
-        <div class="flex-1">
-            {{ page.props.flash.success }}
-        </div>
-
-        <button
-            type="button"
-            class="text-lg leading-none text-green-500 hover:text-green-700"
-            @click="showSuccess = false"
-        >
-            ×
-        </button>
-    </div> -->
-
-    <!-- RESOLVE ERROR TOAST -->
-
-    <!-- <div
-        v-if="showResolveError && page.props.errors.resolve"
-        class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
-    >
-        <div class="flex-1">
-            {{ page.props.errors.resolve }}
-        </div>
-
-        <button
-            type="button"
-            class="text-lg leading-none text-red-500 hover:text-red-700"
-            @click="showResolveError = false"
-        >
-            ×
-        </button>
-    </div> -->
-
-    <!-- CLOSE ERROR TOAST -->
-
-    <!-- <div
-        v-if="showCloseError && page.props.errors.close"
-        class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
-    >
-        <div class="flex-1">
-            {{ page.props.errors.close }}
-        </div>
-
-        <button
-            type="button"
-            class="text-lg leading-none text-red-500 hover:text-red-700"
-            @click="showCloseError = false"
-        >
-            ×
-        </button>
-    </div> -->
-    <!-- <div
-        v-if="showStopClockError && page.props.errors.stop_clock"
-        class="fixed top-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"
-    >
-        <div class="flex-1">
-            {{ page.props.errors.stop_clock }}
-        </div>
-
-        <button
-            type="button"
-            class="text-lg leading-none text-red-500 hover:text-red-700"
-            @click="showStopClockError = false"
-        >
-            ×
-        </button>
-    </div> -->
     <div class="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-8">
-        <div class="mx-auto max-w-7xl">
-            <!-- =====================================================
+        <div class="mx-auto max-w-7xl space-y-6">
+            <!-- ================= HEADER ================= -->
+            <header class="space-y-4">
+                <Link
+                    href="/tickets"
+                    class="inline-block text-sm text-muted-foreground hover:text-foreground"
+                >
+                    ← Kembali ke daftar tiket
+                </Link>
 
-             HEADER
-
-        ====================================================== -->
-
-            <!-- HEADER -->
-            <div
-                class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"
-            >
-                <!-- INFORMASI TICKET -->
-                <div class="min-w-0">
-                    <div
-                        class="mb-2 flex items-center gap-2 text-sm text-muted-foreground"
-                    >
-                        <span>Tickets</span>
-                        <span>/</span>
-                        <span class="text-foreground"> Detail Ticket </span>
+                <div
+                    class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"
+                >
+                    <div class="min-w-0">
+                        <h1 class="text-3xl font-bold tracking-tight">
+                            {{ ticket.ticket_number }}
+                        </h1>
+                        <div class="mt-3 flex flex-wrap items-center gap-2">
+                            <span
+                                class="rounded-md bg-muted px-2.5 py-1 text-xs font-medium"
+                            >
+                                {{
+                                    ticket.ticket_type === 'gamas'
+                                        ? 'GAMAS'
+                                        : 'Individual'
+                                }}
+                            </span>
+                            <span
+                                class="rounded-md px-2.5 py-1 text-xs font-medium"
+                                :class="priorityClass(ticket.priority)"
+                            >
+                                Prioritas {{ priorityLabel(ticket.priority) }}
+                            </span>
+                            <span
+                                class="rounded-md px-2.5 py-1 text-xs font-medium"
+                                :class="statusClass(ticket.status)"
+                            >
+                                {{ statusLabel(ticket.status) }}
+                            </span>
+                        </div>
                     </div>
 
-                    <h1 class="text-3xl font-bold tracking-tight">
-                        {{ ticket.ticket_number }}
-                    </h1>
-
-                    <div class="mt-3 flex flex-wrap items-center gap-2">
-                        <!-- Ticket Type -->
-                        <span
-                            class="rounded-md bg-muted px-2.5 py-1 text-xs font-medium"
+                    <!-- Aksi utama: hanya satu langkah berikutnya yang tampil -->
+                    <div class="flex flex-wrap gap-2">
+                        <button
+                            v-if="ticket.status === 'on_progress'"
+                            type="button"
+                            class="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-green-700"
+                            @click="openResolveForm"
                         >
-                            {{
-                                ticket.ticket_type === 'gamas'
-                                    ? 'GAMAS'
-                                    : 'Individual'
-                            }}
-                        </span>
-
-                        <!-- Priority -->
-                        <span
-                            class="rounded-md px-2.5 py-1 text-xs font-medium"
-                            :class="priorityClass(ticket.priority)"
+                            Resolve tiket
+                        </button>
+                        <button
+                            v-if="ticket.status === 'resolved'"
+                            type="button"
+                            :class="ui.primary"
+                            @click="closeTicket"
                         >
-                            {{ priorityLabel(ticket.priority) }}
-                        </span>
-
-                        <!-- Status -->
-                        <span
-                            class="rounded-md px-2.5 py-1 text-xs font-medium"
-                            :class="statusClass(ticket.status)"
+                            Close tiket
+                        </button>
+                        <button
+                            v-if="ticket.status === 'closed'"
+                            type="button"
+                            class="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-orange-700"
+                            @click="openReopenForm"
                         >
-                            {{ statusLabel(ticket.status) }}
-                        </span>
+                            Re-Open tiket
+                        </button>
                     </div>
                 </div>
 
-                <!-- BUTTON KEMBALI -->
-                <Link
-                    href="/tickets"
-                    class="shrink-0 self-start rounded-lg border bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-muted"
+                <!-- Banner SLA -->
+                <div
+                    v-if="hasActiveStopClock()"
+                    class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 dark:border-yellow-900 dark:bg-yellow-950 dark:text-yellow-200"
                 >
-                    Kembali
-                </Link>
-            </div>
-            <!-- =====================================================
+                    <span>
+                        Stop Clock aktif. Penghitungan SLA sedang dihentikan.
+                    </span>
+                    <button
+                        type="button"
+                        :class="ui.primary"
+                        :disabled="stopClockForm.processing"
+                        @click="resumeStopClock"
+                    >
+                        {{
+                            stopClockForm.processing
+                                ? 'Memproses...'
+                                : 'Lanjutkan SLA'
+                        }}
+                    </button>
+                </div>
 
-             MAIN GRID
+                <!-- Form Resolve -->
+                <div v-if="showResolveForm" :class="ui.card">
+                    <h2 :class="ui.title" class="mb-3">Resolve tiket</h2>
+                    <p class="mb-3 text-sm text-muted-foreground">
+                        Tiket tidak bisa diproses lagi sampai di-Re-Open.
+                    </p>
+                    <label :class="ui.label">Hasil penyelesaian</label>
+                    <select v-model="resolveForm.resolution" :class="ui.input">
+                        <option value="">Pilih hasil penyelesaian</option>
+                        <option value="provider_issue">Provider Issue</option>
+                        <option value="no_issue">No Issue</option>
+                    </select>
+                    <div class="mt-4 flex justify-end gap-2">
+                        <button
+                            type="button"
+                            :class="ui.ghost"
+                            @click="cancelResolveForm"
+                        >
+                            Batal
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-green-700 disabled:opacity-50"
+                            :disabled="
+                                resolveForm.processing ||
+                                !resolveForm.resolution
+                            "
+                            @click="submitResolve"
+                        >
+                            Resolve
+                        </button>
+                    </div>
+                </div>
 
-        ====================================================== -->
-
-            <div class="grid gap-6 xl:grid-cols-3">
-                <!-- =================================================
-
-                 LEFT / MAIN
-
-            ================================================== -->
-
-                <div class="space-y-6 xl:col-span-2">
-                    <!-- =================================================
-
-                     DESCRIPTION
-
-                ================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <h2 class="mb-3 font-semibold">Deskripsi Gangguan</h2>
-
-                        <div class="text-sm whitespace-pre-wrap">
-                            {{ ticket.description || '-' }}
+                <!-- Form Re-Open -->
+                <div v-if="showReopenForm" :class="ui.card">
+                    <h2 :class="ui.title" class="mb-3">Re-Open tiket</h2>
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <div>
+                            <label :class="ui.label">Kendala baru</label>
+                            <select
+                                v-model="reopenForm.kendala_id"
+                                :class="ui.input"
+                            >
+                                <option :value="null">Pilih kendala</option>
+                                <option
+                                    v-for="category in categories"
+                                    :key="category.id"
+                                    :value="category.id"
+                                >
+                                    {{ category.name }}
+                                </option>
+                            </select>
+                        </div>
+                        <div>
+                            <label :class="ui.label">Waktu gangguan</label>
+                            <input
+                                v-model="reopenForm.reported_at"
+                                type="datetime-local"
+                                :class="ui.input"
+                            />
+                        </div>
+                        <div class="md:col-span-2">
+                            <label :class="ui.label">Alasan</label>
+                            <textarea
+                                v-model="reopenForm.reason"
+                                rows="3"
+                                :class="ui.input"
+                                placeholder="Jelaskan alasan Re-Open..."
+                            ></textarea>
                         </div>
                     </div>
-
-                    <!-- =================================================
-
-                     CUSTOMER / SITE
-
-                ================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <div class="mb-4 flex items-center justify-between">
-                            <h2 class="font-semibold">
-                                Customer / Site Terdampak
-                            </h2>
-
-                            <span class="text-sm text-muted-foreground">
-                                {{ ticket.customers.length }}
-
-                                site
-                            </span>
-
-                            <button
-                                v-if="ticket.ticket_type === 'gamas'"
-                                type="button"
-                                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:opacity-50"
-                                @click="openAddSiteForm"
-                            >
-                                + Tambah Site
-                            </button>
-                        </div>
-
-                        <div
-                            v-if="showAddSiteForm"
-                            class="mb-4 rounded-xl border bg-card p-5 shadow-sm"
+                    <div class="mt-4 flex justify-end gap-2">
+                        <button
+                            type="button"
+                            :class="ui.ghost"
+                            @click="showReopenForm = false"
                         >
-                            <div class="mb-4">
-                                <h3 class="font-medium">Tambah Site</h3>
+                            Batal
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-orange-700 disabled:opacity-50"
+                            :disabled="reopenForm.processing"
+                            @click="submitReopen"
+                        >
+                            Re-Open
+                        </button>
+                    </div>
+                </div>
 
-                                <p class="text-sm text-muted-foreground">
-                                    Tambahkan site baru ke ticket GAMAS.
-                                </p>
-                            </div>
+                <!-- Ringkasan cepat -->
+                <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <div :class="ui.card" class="!p-4">
+                        <div :class="ui.muted">Pemilik tiket</div>
+                        <div class="mt-1 truncate font-medium">
+                            {{ ticket.active_assignment?.user?.name || '-' }}
+                        </div>
+                    </div>
+                    <div :class="ui.card" class="!p-4">
+                        <div :class="ui.muted">Respon pertama</div>
+                        <div class="mt-1 text-sm font-medium">
+                            {{ formatDate(ticket.first_response_at) }}
+                        </div>
+                    </div>
+                    <div :class="ui.card" class="!p-4">
+                        <div :class="ui.muted">Waktu down</div>
+                        <div class="mt-1 text-sm font-medium">
+                            {{ formatDowntime(ticket.downtime_minutes) }}
+                        </div>
+                    </div>
+                    <div :class="ui.card" class="!p-4">
+                        <div :class="ui.muted">Ditutup</div>
+                        <div class="mt-1 text-sm font-medium">
+                            {{ formatDate(ticket.closed_at) }}
+                        </div>
+                    </div>
+                </div>
+            </header>
 
-                            <!-- SUMBER SITE -->
+            <!-- ================= TABS ================= -->
+            <nav class="flex gap-1 overflow-x-auto border-b">
+                <button
+                    v-for="tab in tabs"
+                    :key="tab.key"
+                    type="button"
+                    class="-mb-px flex shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition"
+                    :class="
+                        activeTab === tab.key
+                            ? 'border-primary text-foreground'
+                            : 'border-transparent text-muted-foreground hover:text-foreground'
+                    "
+                    @click="activeTab = tab.key"
+                >
+                    {{ tab.label }}
+                    <span class="rounded-full bg-muted px-2 py-0.5 text-xs">
+                        {{ tab.count }}
+                    </span>
+                </button>
+            </nav>
 
-                            <div>
-                                <label class="mb-1 block text-sm font-medium">
-                                    Sumber Site
-                                </label>
-
-                                <select
-                                    v-model="addSiteForm.source"
-                                    class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                >
-                                    <option value="online_billing">
-                                        Sudah ada di Online Billing
-                                    </option>
-
-                                    <option value="manual">
-                                        Belum ada di Online Billing
-                                    </option>
-                                </select>
-                            </div>
-
-                            <!-- =================================================
-
-         SITE DARI ONLINE BILLING
-
-    ================================================== -->
-
-                            <div
-                                v-if="addSiteForm.source === 'online_billing'"
-                                class="mt-4"
+            <div class="grid gap-6 xl:grid-cols-3">
+                <!-- ================= KOLOM UTAMA ================= -->
+                <main class="space-y-6 xl:col-span-2">
+                    <!-- ---------- TAB: RINGKASAN ---------- -->
+                    <template v-if="activeTab === 'overview'">
+                        <section :class="ui.card">
+                            <h2 :class="ui.title" class="mb-3">
+                                Deskripsi gangguan
+                            </h2>
+                            <p
+                                class="text-sm leading-relaxed whitespace-pre-wrap"
                             >
-                                <label class="mb-1 block text-sm font-medium">
-                                    Cari Site
-                                </label>
+                                {{ ticket.description || '-' }}
+                            </p>
+                        </section>
 
-                                <div class="relative">
-                                    <input
-                                        v-model="siteSearch"
-                                        type="text"
-                                        placeholder="Cari nama site atau no jaringan..."
-                                        class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                        @focus="showSiteResults = true"
-                                    />
-
-                                    <!-- HASIL PENCARIAN -->
-
-                                    <div
-                                        v-if="
-                                            showSiteResults &&
-                                            filteredSites.length
-                                        "
-                                        class="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border bg-background shadow-lg"
+                        <section :class="ui.card">
+                            <div
+                                class="mb-4 flex flex-wrap items-center justify-between gap-2"
+                            >
+                                <h2 :class="ui.title">
+                                    Customer / site terdampak
+                                    <span
+                                        class="ml-1 font-normal text-muted-foreground"
                                     >
-                                        <button
-                                            v-for="site in filteredSites"
-                                            :key="site.id"
-                                            type="button"
-                                            class="block w-full border-b px-3 py-3 text-left hover:bg-muted"
-                                            @click="selectSite(site)"
-                                        >
-                                            <div class="text-sm font-medium">
-                                                {{ site.nama_site || '-' }}
-                                            </div>
+                                        ({{ ticket.customers.length }})
+                                    </span>
+                                </h2>
+                                <button
+                                    v-if="
+                                        ticket.ticket_type === 'gamas' &&
+                                        !showAddSiteForm
+                                    "
+                                    type="button"
+                                    :class="ui.primary"
+                                    @click="openAddSiteForm"
+                                >
+                                    + Tambah site
+                                </button>
+                            </div>
 
-                                            <div
-                                                class="text-xs text-muted-foreground"
-                                            >
-                                                No Jaringan:
-
-                                                {{ site.no_jaringan || '-' }}
-                                            </div>
-                                        </button>
-                                    </div>
-
-                                    <!-- TIDAK ADA HASIL -->
-
-                                    <div
-                                        v-if="
-                                            showSiteResults &&
-                                            siteSearch &&
-                                            filteredSites.length === 0
-                                        "
-                                        class="absolute z-50 mt-1 w-full rounded-lg border bg-background p-3 text-sm text-muted-foreground shadow-lg shadow-sm"
+                            <!-- Form tambah site -->
+                            <div
+                                v-if="showAddSiteForm"
+                                :class="ui.panel"
+                                class="mb-4 space-y-4"
+                            >
+                                <div>
+                                    <label :class="ui.label">Sumber site</label>
+                                    <select
+                                        v-model="addSiteForm.source"
+                                        :class="ui.input"
                                     >
-                                        Site tidak ditemukan.
-                                    </div>
+                                        <option value="online_billing">
+                                            Sudah ada di Online Billing
+                                        </option>
+                                        <option value="manual">
+                                            Belum ada di Online Billing
+                                        </option>
+                                    </select>
                                 </div>
-
-                                <!-- SITE TERPILIH -->
 
                                 <div
-                                    v-if="addSiteForm.online_billing_id"
-                                    class="mt-3 rounded-lg border border-border/60 bg-muted/30 p-3"
-                                >
-                                    <div class="text-sm font-medium">
-                                        Site dipilih
-                                    </div>
-
-                                    <div class="mt-1 text-sm">
-                                        {{ siteSearch }}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- =================================================
-
-         SITE MANUAL
-
-    ================================================== -->
-
-                            <div
-                                v-if="addSiteForm.source === 'manual'"
-                                class="mt-4 space-y-4"
-                            >
-                                <div>
-                                    <label
-                                        class="mb-1 block text-sm font-medium"
-                                    >
-                                        Nama Site
-                                    </label>
-
-                                    <input
-                                        v-model="addSiteForm.site_name"
-                                        type="text"
-                                        placeholder="Masukkan nama site"
-                                        class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                    />
-                                </div>
-
-                                <div>
-                                    <label
-                                        class="mb-1 block text-sm font-medium"
-                                    >
-                                        No Jaringan
-                                    </label>
-
-                                    <input
-                                        v-model="addSiteForm.no_jaringan"
-                                        type="text"
-                                        placeholder="Masukkan no jaringan jika sudah ada"
-                                        class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                    />
-                                </div>
-
-                                <div class="mt-4">
-                                    <label
-                                        class="mb-1 block text-sm font-medium"
-                                    >
-                                        Dilaporkan melalui
-                                    </label>
-
-                                    <input
-                                        v-model="addSiteForm.reported_via"
-                                        type="text"
-                                        placeholder="Contoh: WhatsApp, Telepon, Email"
-                                        class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                    />
-                                </div>
-                            </div>
-
-                            <!-- BUTTON -->
-
-                            <div class="mt-4 flex gap-2">
-                                <button
-                                    type="button"
-                                    class="rounded-lg border bg-background px-4 py-2 text-sm transition hover:bg-muted"
-                                    @click="cancelAddSiteForm"
-                                >
-                                    Batal
-                                </button>
-
-                                <button
-                                    type="button"
-                                    class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:opacity-50"
-                                    :disabled="
-                                        addSiteForm.processing ||
-                                        (addSiteForm.source ===
-                                            'online_billing' &&
-                                            !addSiteForm.online_billing_id) ||
-                                        (addSiteForm.source === 'manual' &&
-                                            !addSiteForm.site_name)
+                                    v-if="
+                                        addSiteForm.source === 'online_billing'
                                     "
-                                    @click="submitAddSite"
                                 >
-                                    {{
-                                        addSiteForm.processing
-                                            ? 'Menyimpan...'
-                                            : 'Tambah Site'
-                                    }}
-                                </button>
+                                    <label :class="ui.label">Cari site</label>
+                                    <div class="relative">
+                                        <input
+                                            v-model="siteSearch"
+                                            type="text"
+                                            placeholder="Nama site atau no jaringan..."
+                                            :class="ui.input"
+                                            @focus="showSiteResults = true"
+                                        />
+                                        <div
+                                            v-if="
+                                                showSiteResults &&
+                                                filteredSites.length
+                                            "
+                                            class="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border bg-background shadow-lg"
+                                        >
+                                            <button
+                                                v-for="site in filteredSites"
+                                                :key="site.id"
+                                                type="button"
+                                                class="block w-full border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-muted"
+                                                @click="selectSite(site)"
+                                            >
+                                                <div
+                                                    class="text-sm font-medium"
+                                                >
+                                                    {{ site.nama_site || '-' }}
+                                                </div>
+                                                <div :class="ui.muted">
+                                                    No Jaringan:
+                                                    {{
+                                                        site.no_jaringan || '-'
+                                                    }}
+                                                </div>
+                                            </button>
+                                        </div>
+                                        <div
+                                            v-if="
+                                                showSiteResults &&
+                                                siteSearch &&
+                                                filteredSites.length === 0
+                                            "
+                                            class="absolute z-50 mt-1 w-full rounded-lg border bg-background p-3 text-sm text-muted-foreground shadow-lg"
+                                        >
+                                            Site tidak ditemukan.
+                                        </div>
+                                    </div>
+                                    <p
+                                        v-if="addSiteForm.online_billing_id"
+                                        class="mt-2 text-sm"
+                                    >
+                                        Dipilih:
+                                        <span class="font-medium">{{
+                                            siteSearch
+                                        }}</span>
+                                    </p>
+                                </div>
+
+                                <div v-else class="grid gap-4 md:grid-cols-2">
+                                    <div>
+                                        <label :class="ui.label"
+                                            >Nama site</label
+                                        >
+                                        <input
+                                            v-model="addSiteForm.site_name"
+                                            type="text"
+                                            placeholder="Masukkan nama site"
+                                            :class="ui.input"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label :class="ui.label"
+                                            >No jaringan</label
+                                        >
+                                        <input
+                                            v-model="addSiteForm.no_jaringan"
+                                            type="text"
+                                            placeholder="Jika sudah ada"
+                                            :class="ui.input"
+                                        />
+                                    </div>
+                                    <div class="md:col-span-2">
+                                        <label :class="ui.label"
+                                            >Dilaporkan melalui</label
+                                        >
+                                        <input
+                                            v-model="addSiteForm.reported_via"
+                                            type="text"
+                                            placeholder="Contoh: WhatsApp, Telepon, Email"
+                                            :class="ui.input"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-end gap-2">
+                                    <button
+                                        type="button"
+                                        :class="ui.ghost"
+                                        @click="cancelAddSiteForm"
+                                    >
+                                        Batal
+                                    </button>
+                                    <button
+                                        type="button"
+                                        :class="ui.primary"
+                                        :disabled="
+                                            addSiteForm.processing ||
+                                            (addSiteForm.source ===
+                                                'online_billing' &&
+                                                !addSiteForm.online_billing_id) ||
+                                            (addSiteForm.source === 'manual' &&
+                                                !addSiteForm.site_name)
+                                        "
+                                        @click="submitAddSite"
+                                    >
+                                        {{
+                                            addSiteForm.processing
+                                                ? 'Menyimpan...'
+                                                : 'Tambah site'
+                                        }}
+                                    </button>
+                                </div>
                             </div>
-                        </div>
 
-                        <div v-if="ticket.customers.length" class="space-y-4">
-                            <!-- GROUP CUSTOMER -->
-
+                            <!-- Daftar site -->
                             <div
-                                v-for="group in groupedCustomers"
-                                :key="group.customerName"
-                                class="rounded-xl border bg-card p-5 shadow-sm"
+                                v-if="ticket.customers.length"
+                                class="space-y-5"
                             >
-                                <!-- CUSTOMER NAME -->
-
-                                <div class="mb-4">
-                                    <div class="font-medium">
+                                <div
+                                    v-for="group in groupedCustomers"
+                                    :key="group.customerName"
+                                >
+                                    <div class="mb-2 text-sm font-semibold">
                                         {{ group.customerName }}
                                     </div>
-                                </div>
-
-                                <!-- SITES -->
-
-                                <div class="space-y-4">
-                                    <div
-                                        v-for="customer in group.sites"
-                                        :key="customer.id"
-                                        class="relative rounded-lg border border-border/60 bg-muted/30 p-4"
-                                    >
-                                        <!-- Tombol Lepas Site -->
-
-                                        <button
-                                            v-if="
-                                                ticket.ticket_type === 'gamas'
-                                            "
-                                            type="button"
-                                            class="absolute top-3 right-3 rounded-md px-2 py-1 text-lg leading-none text-muted-foreground hover:bg-red-50 hover:text-red-600"
-                                            title="Lepas Site"
-                                            @click="removeSite(customer)"
+                                    <div class="grid gap-2 md:grid-cols-2">
+                                        <div
+                                            v-for="customer in group.sites"
+                                            :key="customer.id"
+                                            class="relative"
+                                            :class="ui.panel"
                                         >
-                                            ×
-                                        </button>
-
-                                        <!-- SITE INFO -->
-
-                                        <div>
-                                            <div class="text-sm font-medium">
+                                            <button
+                                                v-if="
+                                                    ticket.ticket_type ===
+                                                    'gamas'
+                                                "
+                                                type="button"
+                                                class="absolute top-2 right-2 rounded-md px-2 py-0.5 text-lg leading-none text-muted-foreground hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
+                                                title="Lepas site"
+                                                @click="removeSite(customer)"
+                                            >
+                                                ×
+                                            </button>
+                                            <div
+                                                class="pr-6 text-sm font-medium"
+                                            >
                                                 {{ customer.site_name || '-' }}
                                             </div>
-
-                                            <div
-                                                class="mt-1 text-xs text-muted-foreground"
-                                            >
+                                            <div class="mt-1" :class="ui.muted">
                                                 No Jaringan:
-
                                                 {{
                                                     customer.no_jaringan || '-'
                                                 }}
                                             </div>
-
-                                            <div
-                                                class="text-xs text-muted-foreground"
-                                            >
-                                                Dilaporkan melalui:
-
+                                            <div :class="ui.muted">
+                                                Dilaporkan via:
                                                 {{
                                                     customer.reported_via || '-'
                                                 }}
@@ -1332,143 +1363,265 @@ const hasActiveStopClock = () => {
                                     </div>
                                 </div>
                             </div>
-                        </div>
-
-                        <div
-                            v-else
-                            class="py-6 text-center text-sm text-muted-foreground"
-                        >
-                            Tidak ada customer/site.
-                        </div>
-                    </div>
-
-                    <!-- =================================================
-
-     INCIDENTS
-
-================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <div class="mb-4 flex items-center justify-between">
-                            <h2 class="font-semibold">Case / Insiden</h2>
-
-                            <span class="text-sm text-muted-foreground">
-                                {{ ticket.incidents.length }} Case
-                            </span>
-                        </div>
-
-                        <div v-if="ticket.incidents.length" class="space-y-3">
-                            <div
-                                v-for="incident in ticket.incidents"
-                                :key="incident.id"
-                                class="rounded-lg border border-border/60 bg-muted/30 p-4"
+                            <p
+                                v-else
+                                class="py-6 text-center text-sm text-muted-foreground"
                             >
-                                <!-- Incident Header -->
+                                Belum ada customer atau site.
+                            </p>
+                        </section>
 
-                                <div
-                                    class="mb-3 flex items-center justify-between"
+                        <section :class="ui.card">
+                            <h2 :class="ui.title" class="mb-4">
+                                Case / insiden
+                                <span
+                                    class="ml-1 font-normal text-muted-foreground"
                                 >
-                                    <div class="font-medium">
-                                        Case #{{ incident.incident_number }}
-                                    </div>
-
-                                    <span
-                                        class="rounded-md bg-muted px-2 py-1 text-xs"
+                                    ({{ ticket.incidents.length }})
+                                </span>
+                            </h2>
+                            <div
+                                v-if="ticket.incidents.length"
+                                class="space-y-3"
+                            >
+                                <div
+                                    v-for="incident in ticket.incidents"
+                                    :key="incident.id"
+                                    :class="ui.panel"
+                                >
+                                    <div
+                                        class="mb-3 flex items-center justify-between gap-2"
                                     >
-                                        {{ incident.category.name }}
-                                    </span>
-                                </div>
-
-                                <!-- Incident Reported -->
-
-                                <div class="grid grid-cols-2 gap-4 text-sm">
-                                    <!-- Reported -->
-
-                                    <div>
-                                        <div
-                                            class="text-xs text-muted-foreground"
-                                        >
-                                            Dilaporkan
+                                        <div class="font-medium">
+                                            Case #{{ incident.incident_number }}
                                         </div>
-
+                                        <span
+                                            class="rounded-md bg-muted px-2 py-1 text-xs"
+                                        >
+                                            {{ incident.category.name }}
+                                        </span>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-4 text-sm">
                                         <div>
+                                            <div :class="ui.muted">
+                                                Dilaporkan
+                                            </div>
                                             {{
                                                 formatDate(incident.reported_at)
                                             }}
                                         </div>
-                                    </div>
-
-                                    <!-- Resolved -->
-
-                                    <div>
-                                        <div
-                                            class="text-xs text-muted-foreground"
-                                        >
-                                            Diselesaikan
-                                        </div>
-
                                         <div>
+                                            <div :class="ui.muted">
+                                                Diselesaikan
+                                            </div>
                                             {{
-                                                incident.resolved_at
-                                                    ? formatDate(
-                                                          incident.resolved_at,
-                                                      )
-                                                    : '-'
+                                                formatDate(incident.resolved_at)
                                             }}
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
+                            <p
+                                v-else
+                                class="py-4 text-center text-sm text-muted-foreground"
+                            >
+                                Belum ada insiden.
+                            </p>
+                        </section>
+                    </template>
 
-                        <div
-                            v-else
-                            class="py-4 text-center text-sm text-muted-foreground"
-                        >
-                            Belum ada incident.
-                        </div>
-                    </div>
+                    <!-- ---------- TAB: AKTIVITAS ---------- -->
+                    <template v-if="activeTab === 'activity'">
+                        <section :class="ui.card">
+                            <h2 :class="ui.title" class="mb-4">
+                                Tambah progress
+                            </h2>
+                            <form
+                                class="space-y-4"
+                                @submit.prevent="submitUpdate"
+                            >
+                                <div>
+                                    <label :class="ui.label"
+                                        >Progress / catatan</label
+                                    >
+                                    <textarea
+                                        v-model="updateForm.message"
+                                        rows="4"
+                                        :class="ui.input"
+                                        placeholder="Contoh: Dilakukan pengecekan CPE, ditemukan LOS..."
+                                    ></textarea>
+                                    <p
+                                        v-if="updateForm.errors.message"
+                                        :class="ui.error"
+                                    >
+                                        {{ updateForm.errors.message }}
+                                    </p>
+                                </div>
 
-                    <!-- =================================================
-
-     STOP CLOCK - TICKET LEVEL
-
-================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <!-- =================================================
-
-         STOP CLOCK HEADER
-
-    ================================================== -->
-
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <h2 class="font-semibold">Stop Clock</h2>
-
-                                <div
-                                    v-if="hasActiveStopClock()"
-                                    class="mt-1 text-xs text-yellow-600 dark:text-yellow-400"
-                                >
-                                    SLA sedang dihentikan
+                                <div>
+                                    <label :class="ui.label"
+                                        >Foto / lampiran</label
+                                    >
+                                    <input
+                                        type="file"
+                                        multiple
+                                        accept="image/jpeg,image/png,application/pdf"
+                                        :class="ui.input"
+                                        @change="handleFiles"
+                                    />
+                                    <p class="mt-1" :class="ui.muted">
+                                        Bisa pilih beberapa file. Maksimal 5 MB
+                                        per file.
+                                    </p>
+                                    <p
+                                        v-if="updateForm.errors.attachments"
+                                        :class="ui.error"
+                                    >
+                                        {{ updateForm.errors.attachments }}
+                                    </p>
                                 </div>
 
                                 <div
-                                    v-else
-                                    class="mt-1 text-xs text-muted-foreground"
+                                    v-if="updateForm.attachments.length"
+                                    class="space-y-2"
                                 >
-                                    SLA berjalan
+                                    <div
+                                        v-for="file in updateForm.attachments"
+                                        :key="file.name + file.size"
+                                        class="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                                    >
+                                        <span class="truncate">{{
+                                            file.name
+                                        }}</span>
+                                        <span
+                                            class="ml-3 shrink-0"
+                                            :class="ui.muted"
+                                        >
+                                            {{
+                                                (
+                                                    file.size /
+                                                    1024 /
+                                                    1024
+                                                ).toFixed(2)
+                                            }}
+                                            MB
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-end">
+                                    <button
+                                        type="submit"
+                                        :class="ui.primary"
+                                        :disabled="
+                                            updateForm.processing ||
+                                            !updateForm.message.trim()
+                                        "
+                                    >
+                                        {{
+                                            updateForm.processing
+                                                ? 'Menyimpan...'
+                                                : 'Kirim progress'
+                                        }}
+                                    </button>
+                                </div>
+                            </form>
+                        </section>
+
+                        <section :class="ui.card">
+                            <h2 :class="ui.title" class="mb-5">
+                                Riwayat aktivitas
+                            </h2>
+                            <div v-if="ticket.updates.length" class="space-y-6">
+                                <div
+                                    v-for="update in ticket.updates"
+                                    :key="update.id"
+                                    class="relative border-l pl-5"
+                                >
+                                    <div
+                                        class="absolute top-1.5 -left-1.5 h-3 w-3 rounded-full bg-primary"
+                                    ></div>
+                                    <div
+                                        class="flex flex-wrap items-center justify-between gap-2"
+                                    >
+                                        <div class="text-sm font-medium">
+                                            {{ update.user.name }}
+                                        </div>
+                                        <div :class="ui.muted">
+                                            {{ formatDate(update.created_at) }}
+                                        </div>
+                                    </div>
+                                    <p
+                                        class="mt-2 text-sm leading-relaxed whitespace-pre-wrap"
+                                    >
+                                        {{ update.message }}
+                                    </p>
+                                    <div
+                                        v-if="update.attachments.length"
+                                        class="mt-3 space-y-2"
+                                    >
+                                        <a
+                                            v-for="attachment in update.attachments"
+                                            :key="attachment.id"
+                                            :href="`/storage/${attachment.file_path}`"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="flex items-center justify-between rounded-md border px-3 py-2 text-sm hover:bg-muted"
+                                        >
+                                            <span class="truncate">{{
+                                                attachment.file_name
+                                            }}</span>
+                                            <span
+                                                v-if="attachment.file_size"
+                                                class="ml-3 shrink-0"
+                                                :class="ui.muted"
+                                            >
+                                                {{
+                                                    (
+                                                        attachment.file_size /
+                                                        1024 /
+                                                        1024
+                                                    ).toFixed(2)
+                                                }}
+                                                MB
+                                            </span>
+                                        </a>
+                                    </div>
                                 </div>
                             </div>
+                            <p
+                                v-else
+                                class="py-6 text-center text-sm text-muted-foreground"
+                            >
+                                Belum ada aktivitas. Tambahkan progress pertama
+                                di atas.
+                            </p>
+                        </section>
+                    </template>
 
-                            <!-- =================================================
-
-             ACTION BUTTON
-
-        ================================================== -->
-
-                            <div class="flex items-center gap-2">
-                                <!-- Start Stop Clock -->
+                    <!-- ---------- TAB: STOP CLOCK & RFO ---------- -->
+                    <template v-if="activeTab === 'sla'">
+                        <section :class="ui.card">
+                            <div
+                                class="flex flex-wrap items-center justify-between gap-2"
+                            >
+                                <div>
+                                    <h2 :class="ui.title">Stop Clock</h2>
+                                    <p
+                                        class="mt-1 text-xs"
+                                        :class="
+                                            hasActiveStopClock()
+                                                ? 'text-yellow-600 dark:text-yellow-400'
+                                                : 'text-muted-foreground'
+                                        "
+                                    >
+                                        {{
+                                            hasActiveStopClock()
+                                                ? 'SLA sedang dihentikan'
+                                                : 'SLA berjalan'
+                                        }}
+                                    </p>
+                                </div>
 
                                 <button
                                     v-if="
@@ -1476,101 +1629,71 @@ const hasActiveStopClock = () => {
                                         ticket.status === 'on_progress'
                                     "
                                     type="button"
-                                    class="rounded-lg border bg-background px-3 py-2.5 text-sm transition hover:bg-muted focus:ring-2 focus:ring-ring focus:outline-none"
+                                    :class="ui.ghost"
                                     @click="
                                         showStopClockForm = !showStopClockForm;
-
-                                        if (showStopClockForm) {
+                                        if (showStopClockForm)
                                             stopClockForm.reason = '';
-                                        }
                                     "
                                 >
                                     {{
                                         showStopClockForm
-                                            ? 'Tutup Form'
-                                            : 'Stop Clock'
+                                            ? 'Tutup form'
+                                            : 'Mulai Stop Clock'
                                     }}
                                 </button>
-
-                                <!-- Resume Stop Clock -->
-
                                 <button
                                     v-else-if="hasActiveStopClock()"
                                     type="button"
-                                    class="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:opacity-50"
+                                    :class="ui.primary"
                                     :disabled="stopClockForm.processing"
                                     @click="resumeStopClock"
                                 >
                                     {{
                                         stopClockForm.processing
                                             ? 'Memproses...'
-                                            : 'Resume Clock'
+                                            : 'Lanjutkan SLA'
                                     }}
                                 </button>
                             </div>
-                        </div>
 
-                        <!-- =================================================
-
-         STOP CLOCK FORM
-
-    ================================================== -->
-
-                        <div
-                            v-if="
-                                showStopClockForm &&
-                                ticket.status === 'on_progress' &&
-                                !hasActiveStopClock()
-                            "
-                            class="mt-3 rounded-lg border bg-background p-4 shadow-sm"
-                        >
                             <form
-                                class="space-y-3"
+                                v-if="
+                                    showStopClockForm &&
+                                    ticket.status === 'on_progress' &&
+                                    !hasActiveStopClock()
+                                "
+                                class="mt-4 space-y-3"
+                                :class="ui.panel"
                                 @submit.prevent="submitStopClock"
                             >
-                                <!-- Reason -->
-
-                                <div>
-                                    <label
-                                        class="mb-2 block text-sm font-medium"
-                                    >
-                                        Alasan Stop Clock
-                                    </label>
-
-                                    <textarea
-                                        v-model="stopClockForm.reason"
-                                        rows="3"
-                                        class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                        placeholder="Contoh: Menunggu customer melakukan pengecekan power CPE..."
-                                    ></textarea>
-
-                                    <p
-                                        v-if="stopClockForm.errors.reason"
-                                        class="mt-1 text-sm text-destructive"
-                                    >
-                                        {{ stopClockForm.errors.reason }}
-                                    </p>
-                                </div>
-
-                                <!-- Form Action -->
-
+                                <label :class="ui.label"
+                                    >Alasan Stop Clock</label
+                                >
+                                <textarea
+                                    v-model="stopClockForm.reason"
+                                    rows="3"
+                                    :class="ui.input"
+                                    placeholder="Contoh: Menunggu customer mengecek power CPE..."
+                                ></textarea>
+                                <p
+                                    v-if="stopClockForm.errors.reason"
+                                    :class="ui.error"
+                                >
+                                    {{ stopClockForm.errors.reason }}
+                                </p>
                                 <div class="flex justify-end gap-2">
-                                    <!-- Batal -->
-
                                     <button
                                         type="button"
-                                        class="rounded-lg border bg-background px-3 py-2.5 text-sm transition hover:bg-muted focus:ring-2 focus:ring-ring focus:outline-none"
+                                        :class="ui.ghost"
                                         :disabled="stopClockForm.processing"
                                         @click="cancelStopClockForm"
                                     >
                                         Batal
                                     </button>
-
-                                    <!-- Mulai Stop Clock -->
-
                                     <button
                                         type="submit"
-                                        class="rounded-lg bg-yellow-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-yellow-700 disabled:opacity-50"
+                                        class="rounded-lg bg-yellow-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-yellow-700 disabled:opacity-50"
                                         :disabled="
                                             stopClockForm.processing ||
                                             !stopClockForm.reason.trim()
@@ -1584,206 +1707,126 @@ const hasActiveStopClock = () => {
                                     </button>
                                 </div>
                             </form>
-                        </div>
-
-                        <!-- =================================================
-
-         STOP CLOCK HISTORY
-
-    ================================================== -->
-
-                        <div
-                            v-if="ticket.stop_clocks.length"
-                            class="mt-4 space-y-2"
-                        >
-                            <div
-                                class="text-xs font-medium text-muted-foreground"
-                            >
-                                Riwayat Stop Clock
-                            </div>
 
                             <div
-                                v-for="stopClock in ticket.stop_clocks"
-                                :key="stopClock.id"
-                                class="rounded-lg border bg-background p-3 text-xs shadow-sm"
+                                v-if="ticket.stop_clocks.length"
+                                class="mt-5 space-y-2"
                             >
-                                <!-- =================================================
-
-                 TIME
-
-            ================================================== -->
-
-                                <div class="grid gap-2 sm:grid-cols-2">
-                                    <div>
-                                        <span class="text-muted-foreground">
-                                            Mulai:
-                                        </span>
-
-                                        <span class="ml-1">
+                                <div :class="ui.muted">Riwayat</div>
+                                <div
+                                    v-for="stopClock in ticket.stop_clocks"
+                                    :key="stopClock.id"
+                                    class="rounded-lg border p-3 text-sm"
+                                >
+                                    <div
+                                        class="flex flex-wrap items-center justify-between gap-2"
+                                    >
+                                        <span :class="ui.muted">
                                             {{
                                                 formatDate(stopClock.started_at)
                                             }}
-                                        </span>
-                                    </div>
-
-                                    <div>
-                                        <span class="text-muted-foreground">
-                                            Selesai:
-                                        </span>
-
-                                        <span class="ml-1">
+                                            –
                                             {{
                                                 stopClock.ended_at
                                                     ? formatDate(
                                                           stopClock.ended_at,
                                                       )
-                                                    : '-'
+                                                    : 'sekarang'
                                             }}
                                         </span>
+                                        <span
+                                            v-if="stopClock.ended_at === null"
+                                            class="rounded-md bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300"
+                                        >
+                                            Aktif
+                                        </span>
                                     </div>
-                                </div>
-
-                                <!-- =================================================
-
-                 REASON
-
-            ================================================== -->
-
-                                <div class="mt-2">
-                                    <span class="text-muted-foreground">
-                                        Reason:
-                                    </span>
-
-                                    <span class="ml-1">
-                                        {{ stopClock.reason }}
-                                    </span>
-                                </div>
-
-                                <!-- =================================================
-
-                 ACTIVE INDICATOR
-
-            ================================================== -->
-
-                                <div
-                                    v-if="stopClock.ended_at === null"
-                                    class="mt-2 font-medium text-yellow-600 dark:text-yellow-400"
-                                >
-                                    ⏸ Sedang aktif
+                                    <p class="mt-1.5">{{ stopClock.reason }}</p>
                                 </div>
                             </div>
-                        </div>
-
-                        <!-- =================================================
-
-         EMPTY HISTORY
-
-    ================================================== -->
-
-                        <div
-                            v-else
-                            class="mt-4 py-4 text-center text-sm text-muted-foreground"
-                        >
-                            Belum ada riwayat Stop Clock.
-                        </div>
-                    </div>
-
-                    <!-- =================================================
-
-     RFO
-
-================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <div class="mb-4">
-                            <h2 class="font-semibold">RFO</h2>
-
-                            <p class="mt-1 text-sm text-muted-foreground">
-                                Root Cause &amp; Resolution ticket.
-                            </p>
-                        </div>
-
-                        <!-- FORM BUAT RFO -->
-
-                        <div
-                            v-if="
-                                ticket.status === 'resolved' ||
-                                ticket.status === 'closed'
-                            "
-                        >
-                            <button
-                                type="button"
-                                class="rounded-lg border bg-background px-4 py-2 text-sm font-medium transition hover:bg-muted"
-                                @click="showRfoForm = !showRfoForm"
+                            <p
+                                v-else
+                                class="mt-4 text-sm text-muted-foreground"
                             >
-                                {{
-                                    showRfoForm ? 'Tutup Form RFO' : 'Buat RFO'
-                                }}
-                            </button>
+                                Belum ada riwayat Stop Clock.
+                            </p>
+                        </section>
+
+                        <section :class="ui.card">
+                            <div
+                                class="mb-4 flex flex-wrap items-start justify-between gap-2"
+                            >
+                                <div>
+                                    <h2 :class="ui.title">RFO</h2>
+                                    <p
+                                        class="mt-1 text-sm text-muted-foreground"
+                                    >
+                                        Root cause dan penyelesaian tiket.
+                                    </p>
+                                </div>
+                                <button
+                                    v-if="
+                                        ticket.status === 'resolved' ||
+                                        ticket.status === 'closed'
+                                    "
+                                    type="button"
+                                    :class="ui.ghost"
+                                    @click="showRfoForm = !showRfoForm"
+                                >
+                                    {{
+                                        showRfoForm
+                                            ? 'Tutup form'
+                                            : '+ Buat RFO'
+                                    }}
+                                </button>
+                            </div>
 
                             <form
                                 v-if="showRfoForm"
+                                class="mb-5 space-y-3"
+                                :class="ui.panel"
                                 @submit.prevent="submitRfo"
-                                class="mt-4 space-y-4"
                             >
-                                <div>
-                                    <label
-                                        class="mb-1 block text-sm font-medium"
-                                    >
-                                        Isi RFO
-                                    </label>
-
-                                    <textarea
-                                        v-model="rfoForm.content"
-                                        rows="8"
-                                        class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                        placeholder="Tuliskan root cause, tindakan penyelesaian, dan preventive action..."
-                                    ></textarea>
-
-                                    <div
-                                        v-if="rfoForm.errors.content"
-                                        class="mt-1 text-sm text-red-600"
-                                    >
-                                        {{ rfoForm.errors.content }}
-                                    </div>
-                                </div>
-
-                                <button
-                                    type="submit"
-                                    class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90"
-                                    :disabled="rfoForm.processing"
+                                <label :class="ui.label">Isi RFO</label>
+                                <textarea
+                                    v-model="rfoForm.content"
+                                    rows="8"
+                                    :class="ui.input"
+                                    placeholder="Tuliskan root cause, tindakan penyelesaian, dan preventive action..."
+                                ></textarea>
+                                <p
+                                    v-if="rfoForm.errors.content"
+                                    :class="ui.error"
                                 >
-                                    {{
-                                        rfoForm.processing
-                                            ? 'Menyimpan...'
-                                            : 'Simpan RFO'
-                                    }}
-                                </button>
+                                    {{ rfoForm.errors.content }}
+                                </p>
+                                <div class="flex justify-end">
+                                    <button
+                                        type="submit"
+                                        :class="ui.primary"
+                                        :disabled="rfoForm.processing"
+                                    >
+                                        {{
+                                            rfoForm.processing
+                                                ? 'Menyimpan...'
+                                                : 'Simpan RFO'
+                                        }}
+                                    </button>
+                                </div>
                             </form>
-                        </div>
 
-                        <!-- RFO YANG SUDAH TERSIMPAN -->
-
-                        <div class="mt-6">
                             <div v-if="ticket.rfos.length" class="space-y-4">
                                 <div
                                     v-for="rfo in ticket.rfos"
                                     :key="rfo.id"
-                                    class="rounded-lg border border-border/60 bg-muted/30 p-4"
+                                    :class="ui.panel"
                                 >
                                     <div
-                                        class="mb-3 flex items-center justify-between"
+                                        class="mb-2 flex flex-wrap items-center justify-between gap-2"
                                     >
                                         <div class="font-medium">
                                             {{ rfo.rfo_number }}
                                         </div>
-
-                                        <div
-                                            class="text-xs text-muted-foreground"
-                                        >
-                                            {{ formatDate(rfo.created_at) }}
-                                        </div>
-
                                         <button
                                             v-if="
                                                 (ticket.status === 'resolved' ||
@@ -1792,50 +1835,40 @@ const hasActiveStopClock = () => {
                                                 editingRfoId !== rfo.id
                                             "
                                             type="button"
-                                            class="rounded-md border px-2 py-1 text-xs hover:bg-muted"
+                                            class="rounded-md border px-2.5 py-1 text-xs hover:bg-muted"
                                             @click="startEditRfo(rfo)"
                                         >
                                             Edit
                                         </button>
                                     </div>
-
-                                    <div class="mb-3 text-sm">
-                                        <span class="text-muted-foreground">
-                                            Dibuat oleh:
-                                        </span>
-
-                                        {{ rfo.creator.name }}
+                                    <div class="mb-3" :class="ui.muted">
+                                        Dibuat oleh {{ rfo.creator.name }} ·
+                                        {{ formatDate(rfo.created_at) }}
                                     </div>
 
-                                    <!-- Tampilan normal -->
-
-                                    <div
+                                    <p
                                         v-if="editingRfoId !== rfo.id"
-                                        class="text-sm whitespace-pre-line"
+                                        class="text-sm leading-relaxed whitespace-pre-line"
                                     >
                                         {{ rfo.content }}
-                                    </div>
-
-                                    <!-- Form Edit -->
+                                    </p>
 
                                     <div v-else class="space-y-3">
                                         <textarea
                                             v-model="editRfoForm.content"
                                             rows="8"
-                                            class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
+                                            :class="ui.input"
                                         ></textarea>
-
-                                        <div
+                                        <p
                                             v-if="editRfoForm.errors.content"
-                                            class="text-sm text-red-600"
+                                            :class="ui.error"
                                         >
                                             {{ editRfoForm.errors.content }}
-                                        </div>
-
+                                        </p>
                                         <div class="flex justify-end gap-2">
                                             <button
                                                 type="button"
-                                                class="rounded-lg border bg-background px-3 py-2.5 text-sm transition hover:bg-muted focus:ring-2 focus:ring-ring focus:outline-none"
+                                                :class="ui.ghost"
                                                 :disabled="
                                                     editRfoForm.processing
                                                 "
@@ -1843,10 +1876,9 @@ const hasActiveStopClock = () => {
                                             >
                                                 Batal
                                             </button>
-
                                             <button
                                                 type="button"
-                                                class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                                                :class="ui.primary"
                                                 :disabled="
                                                     editRfoForm.processing ||
                                                     !editRfoForm.content.trim()
@@ -1856,534 +1888,353 @@ const hasActiveStopClock = () => {
                                                 {{
                                                     editRfoForm.processing
                                                         ? 'Menyimpan...'
-                                                        : 'Simpan Perubahan'
+                                                        : 'Simpan perubahan'
                                                 }}
                                             </button>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-
-                            <div
+                            <p
                                 v-else
-                                class="rounded-lg border border-border/60 bg-muted/30 p-4 text-center text-sm text-muted-foreground"
+                                class="text-center text-sm text-muted-foreground"
                             >
                                 Belum ada RFO.
-                            </div>
-                        </div>
-                    </div>
+                                <template
+                                    v-if="
+                                        ticket.status === 'on_progress' ||
+                                        ticket.status === 'open'
+                                    "
+                                >
+                                    RFO bisa dibuat setelah tiket di-resolve.
+                                </template>
+                            </p>
+                        </section>
+                    </template>
+                </main>
 
-                    <!-- =================================================
-
-                     ACTIVITY / PROGRESS
-
-                ================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <h2 class="mb-5 font-semibold">Activity / Progress</h2>
-
-                        <div v-if="ticket.updates.length" class="space-y-5">
-                            <div
-                                v-for="update in ticket.updates"
-                                :key="update.id"
-                                class="relative border-l pl-5"
+                <!-- ================= SIDEBAR ================= -->
+                <aside class="space-y-6">
+                    <section :class="ui.card">
+                        <div class="mb-4 flex items-center justify-between">
+                            <h2 :class="ui.title">Pemilik tiket</h2>
+                            <button
+                                v-if="canHandover"
+                                type="button"
+                                :class="ui.ghost"
+                                class="!px-3 !py-1.5 !text-xs"
+                                @click="showHandoverForm = !showHandoverForm"
                             >
-                                <!-- Timeline Dot -->
+                                {{ showHandoverForm ? 'Tutup' : 'Serahkan' }}
+                            </button>
+                        </div>
 
-                                <div
-                                    class="absolute top-1 -left-1.5 h-3 w-3 rounded-full bg-primary"
-                                ></div>
-
-                                <!-- Update Header -->
-
-                                <div
-                                    class="flex items-center justify-between gap-4"
-                                >
-                                    <div class="font-medium">
-                                        {{ update.user.name }}
-                                    </div>
-
-                                    <div class="text-xs text-muted-foreground">
-                                        {{ formatDate(update.created_at) }}
-                                    </div>
-                                </div>
-
-                                <!-- Message -->
-
-                                <div class="mt-2 text-sm whitespace-pre-wrap">
-                                    {{ update.message }}
-                                </div>
-
-                                <!-- Attachments -->
-
-                                <div
-                                    v-if="update.attachments.length"
-                                    class="mt-3 space-y-2"
-                                >
-                                    <div
-                                        class="text-xs font-medium text-muted-foreground"
-                                    >
-                                        Attachment
-                                    </div>
-
-                                    <div
-                                        v-for="attachment in update.attachments"
-                                        :key="attachment.id"
-                                        class="flex items-center justify-between rounded-md border p-2 text-sm"
-                                    >
-                                        <a
-                                            :href="`/storage/${attachment.file_path}`"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            class="truncate hover:underline"
-                                        >
-                                            {{ attachment.file_name }}
-                                        </a>
-
-                                        <span
-                                            v-if="attachment.file_size"
-                                            class="ml-3 shrink-0 text-xs text-muted-foreground"
-                                        >
-                                            {{
-                                                (
-                                                    attachment.file_size /
-                                                    1024 /
-                                                    1024
-                                                ).toFixed(2)
-                                            }}
-
-                                            MB
-                                        </span>
-                                    </div>
-                                </div>
+                        <div :class="ui.panel">
+                            <div class="font-medium">
+                                {{
+                                    ticket.active_assignment?.user?.name || '-'
+                                }}
+                            </div>
+                            <div
+                                v-if="ticket.active_assignment"
+                                class="mt-1"
+                                :class="ui.muted"
+                            >
+                                Sejak
+                                {{
+                                    formatDate(
+                                        ticket.active_assignment.assigned_at,
+                                    )
+                                }}
+                            </div>
+                            <div v-else class="mt-1 text-xs text-destructive">
+                                Belum ada pemilik tiket aktif.
                             </div>
                         </div>
 
-                        <div
-                            v-else
-                            class="py-6 text-center text-sm text-muted-foreground"
+                        <form
+                            v-if="showHandoverForm"
+                            class="mt-4 space-y-4 rounded-lg border p-4"
+                            @submit.prevent="submitHandover"
                         >
-                            Belum ada aktivitas.
-                        </div>
-                    </div>
-                </div>
-
-                <!-- =================================================
-
-                 RIGHT SIDEBAR
-
-            ================================================== -->
-
-                <div class="space-y-6">
-                    <!-- =================================================
-
-                     TICKET INFORMATION
-
-                ================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <h2 class="mb-4 font-semibold">Informasi Ticket</h2>
-
-                        <div class="space-y-4 text-sm">
-                            <!-- Created By -->
-
                             <div>
-                                <div class="text-xs text-muted-foreground">
-                                    Dibuat oleh
-                                </div>
-
-                                <div>
-                                    {{ ticket.creator?.name || '-' }}
-                                </div>
-                            </div>
-
-                            <!-- Created -->
-
-                            <div>
-                                <div class="text-xs text-muted-foreground">
-                                    Dibuat
-                                </div>
-
-                                <div>
-                                    {{ formatDate(ticket.created_at) }}
-                                </div>
-                            </div>
-
-                            <!-- Reported -->
-
-                            <!-- <div>
-
-                            <div class="text-xs text-muted-foreground">
-
-                                Laporan Diterima
-
-                            </div>
-
-                            <div>
-
-                                {{ formatDate(ticket.reported_at) }}
-
-                            </div>
-
-                        </div> -->
-
-                            <!-- First Response -->
-
-                            <div>
-                                <div class="text-xs text-muted-foreground">
-                                    Respon Pertama
-                                </div>
-
-                                <div>
-                                    {{ formatDate(ticket.first_response_at) }}
-                                </div>
-                            </div>
-
-                            <!-- Downtime -->
-
-                            <div>
-                                <div class="text-xs text-muted-foreground">
-                                    Waktu Down
-                                </div>
-
-                                <div>
-                                    {{
-                                        formatDowntime(ticket.downtime_minutes)
-                                    }}
-                                </div>
-                            </div>
-
-                            <!-- Resolved -->
-
-                            <!-- <div>
-
-                            <div class="text-xs text-muted-foreground">
-
-                                Diselesaikan
-
-                            </div>
-
-                            <div>
-
-                                {{ formatDate(ticket.resolved_at) }}
-
-                            </div>
-
-                        </div> -->
-
-                            <!-- Closed -->
-
-                            <div>
-                                <div class="text-xs text-muted-foreground">
-                                    Ditutup/Close
-                                </div>
-
-                                <div>
-                                    {{ formatDate(ticket.closed_at) }}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- =================================================
-
-                     ADD UPDATE
-
-                ================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <h2 class="mb-4 font-semibold">Tambah Progress</h2>
-
-                        <form class="space-y-4" @submit.prevent="submitUpdate">
-                            <!-- Message -->
-
-                            <div>
-                                <label class="mb-2 block text-sm font-medium">
-                                    Progress / Catatan
-                                </label>
-
-                                <textarea
-                                    v-model="updateForm.message"
-                                    rows="4"
-                                    class="w-full rounded-md border px-3 py-2"
-                                    placeholder="Contoh: Dilakukan pengecekan CPE, ditemukan LOS..."
-                                ></textarea>
-
-                                <p
-                                    v-if="updateForm.errors.message"
-                                    class="mt-1 text-sm text-destructive"
+                                <label :class="ui.label">Pemilik baru</label>
+                                <select
+                                    v-model="handoverForm.user_id"
+                                    :class="ui.input"
                                 >
-                                    {{ updateForm.errors.message }}
-                                </p>
-                            </div>
-
-                            <!-- Attachment -->
-
-                            <div>
-                                <label class="mb-2 block text-sm font-medium">
-                                    Foto / Attachment
-                                </label>
-
-                                <input
-                                    type="file"
-                                    multiple
-                                    accept="image/jpeg,image/png,application/pdf"
-                                    class="block w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                    @change="handleFiles"
-                                />
-
-                                <p class="mt-1 text-xs text-muted-foreground">
-                                    Bisa memilih beberapa foto sekaligus.
-                                    Maksimal 5 MB per file.
-                                </p>
-
-                                <p
-                                    v-if="updateForm.errors.attachments"
-                                    class="mt-1 text-sm text-destructive"
-                                >
-                                    {{ updateForm.errors.attachments }}
-                                </p>
-                            </div>
-
-                            <!-- Selected Files -->
-
-                            <div
-                                v-if="updateForm.attachments.length"
-                                class="space-y-2"
-                            >
-                                <div class="text-sm font-medium">
-                                    File yang dipilih
-                                </div>
-
-                                <div
-                                    v-for="file in updateForm.attachments"
-                                    :key="file.name + file.size"
-                                    class="flex items-center justify-between rounded-md border p-2 text-sm"
-                                >
-                                    <span class="truncate">
-                                        {{ file.name }}
-                                    </span>
-
-                                    <span
-                                        class="ml-3 shrink-0 text-xs text-muted-foreground"
+                                    <option :value="null">
+                                        Pilih staf ticketing
+                                    </option>
+                                    <option
+                                        v-for="staff in ticketingStaff"
+                                        :key="staff.id"
+                                        :value="staff.id"
                                     >
-                                        {{
-                                            (file.size / 1024 / 1024).toFixed(2)
-                                        }}
-
-                                        MB
-                                    </span>
-                                </div>
+                                        {{ staff.name }}
+                                    </option>
+                                </select>
+                                <p
+                                    v-if="handoverForm.errors.user_id"
+                                    :class="ui.error"
+                                >
+                                    {{ handoverForm.errors.user_id }}
+                                </p>
+                                <p
+                                    v-if="ticketingStaff.length === 0"
+                                    class="mt-1"
+                                    :class="ui.muted"
+                                >
+                                    Tidak ada staf ticketing aktif lainnya.
+                                </p>
                             </div>
-
-                            <!-- Submit -->
-
-                            <div class="flex justify-end">
+                            <div>
+                                <label :class="ui.label"
+                                    >Catatan serah terima</label
+                                >
+                                <textarea
+                                    v-model="handoverForm.handover_note"
+                                    rows="3"
+                                    maxlength="2000"
+                                    :class="ui.input"
+                                    placeholder="Kondisi terakhir tiket dan pekerjaan yang perlu dilanjutkan..."
+                                ></textarea>
+                                <p
+                                    v-if="handoverForm.errors.handover_note"
+                                    :class="ui.error"
+                                >
+                                    {{ handoverForm.errors.handover_note }}
+                                </p>
+                            </div>
+                            <div class="flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    :class="ui.ghost"
+                                    :disabled="handoverForm.processing"
+                                    @click="
+                                        handoverForm.reset();
+                                        handoverForm.clearErrors();
+                                        showHandoverForm = false;
+                                    "
+                                >
+                                    Batal
+                                </button>
                                 <button
                                     type="submit"
-                                    class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90 disabled:opacity-50"
+                                    :class="ui.primary"
                                     :disabled="
-                                        updateForm.processing ||
-                                        !updateForm.message.trim()
+                                        handoverForm.processing ||
+                                        !handoverForm.user_id ||
+                                        ticketingStaff.length === 0
                                     "
                                 >
                                     {{
-                                        updateForm.processing
-                                            ? 'Menyimpan...'
-                                            : 'Tambah Progress'
+                                        handoverForm.processing
+                                            ? 'Menyerahkan...'
+                                            : 'Serahkan tiket'
                                     }}
                                 </button>
                             </div>
                         </form>
-                    </div>
 
-                    <!-- =================================================
-
-                     ACTIONS
-
-                ================================================== -->
-
-                    <div class="rounded-xl border bg-card p-6 shadow-sm">
-                        <h2 class="mb-4 font-semibold">Action</h2>
-
-                        <div class="space-y-2">
-                            <!-- Resolve -->
-
-                            <!-- Resolve -->
-
-                            <button
-                                v-if="ticket.status === 'on_progress'"
-                                type="button"
-                                class="w-full rounded-lg bg-green-600 px-4 py-2 text-sm text-white shadow-sm transition hover:bg-green-700"
-                                @click="openResolveForm"
+                        <details class="group mt-4">
+                            <summary
+                                class="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground"
                             >
-                                Resolve Ticket
-                            </button>
-
+                                Riwayat pemilik ({{ handoverHistory.length }})
+                            </summary>
                             <div
-                                v-if="showResolveForm"
-                                class="mt-4 rounded-md border p-4"
+                                v-if="handoverHistory.length"
+                                class="mt-3 space-y-3"
                             >
-                                <div class="mb-4 font-medium">
-                                    Resolve Ticket
-                                </div>
-
-                                <div class="space-y-4">
-                                    <div>
-                                        <label
-                                            class="mb-1 block text-sm font-medium"
+                                <div
+                                    v-for="assignment in handoverHistory"
+                                    :key="assignment.id"
+                                    class="border-l-2 border-primary pl-3"
+                                >
+                                    <div
+                                        class="flex items-center justify-between gap-2 text-sm font-medium"
+                                    >
+                                        {{ assignment.user?.name || '-' }}
+                                        <span
+                                            v-if="!assignment.ended_at"
+                                            class="rounded-md bg-green-100 px-2 py-0.5 text-xs text-green-700 dark:bg-green-950 dark:text-green-300"
                                         >
-                                            Hasil Penyelesaian
-                                        </label>
-
-                                        <select
-                                            v-model="resolveForm.resolution"
-                                            class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                        >
-                                            <option value="">
-                                                Pilih Hasil Penyelesaian
-                                            </option>
-
-                                            <option value="provider_issue">
-                                                Provider Issue
-                                            </option>
-
-                                            <option value="no_issue">
-                                                No Issue
-                                            </option>
-                                        </select>
+                                            Saat ini
+                                        </span>
                                     </div>
-
-                                    <div class="flex gap-2">
-                                        <button
-                                            type="button"
-                                            class="rounded-lg border bg-background px-4 py-2 text-sm transition hover:bg-muted"
-                                            @click="cancelResolveForm"
-                                        >
-                                            Batal
-                                        </button>
-
-                                        <button
-                                            type="button"
-                                            class="rounded-lg bg-green-600 px-4 py-2 text-sm text-white shadow-sm transition hover:bg-green-700 disabled:opacity-50"
-                                            :disabled="
-                                                resolveForm.processing ||
-                                                !resolveForm.resolution
-                                            "
-                                            @click="submitResolve"
-                                        >
-                                            Resolve
-                                        </button>
+                                    <div class="mt-0.5" :class="ui.muted">
+                                        {{ formatDate(assignment.assigned_at) }}
+                                        <template v-if="assignment.ended_at">
+                                            –
+                                            {{
+                                                formatDate(assignment.ended_at)
+                                            }}
+                                        </template>
                                     </div>
+                                    <p
+                                        v-if="assignment.handover_note"
+                                        class="mt-2 rounded-md bg-muted/50 p-2.5 text-xs whitespace-pre-wrap"
+                                    >
+                                        {{ assignment.handover_note }}
+                                    </p>
                                 </div>
                             </div>
-
-                            <button
-                                v-if="ticket.status === 'resolved'"
-                                type="button"
-                                class="w-full rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition hover:opacity-90"
-                                @click="closeTicket"
+                            <p
+                                v-else
+                                class="mt-3 text-sm text-muted-foreground"
                             >
-                                Close Ticket
-                            </button>
+                                Belum ada riwayat.
+                            </p>
+                        </details>
+                    </section>
 
-                            <!-- Re-Open -->
-
+                    <section :class="ui.card">
+                        <div
+                            class="mb-4 flex items-center justify-between gap-2"
+                        >
+                            <h2 :class="ui.title">Peserta penanganan</h2>
                             <button
-                                v-if="ticket.status === 'closed'"
+                                v-if="canManageParticipants"
                                 type="button"
-                                class="w-full rounded-lg bg-orange-600 px-4 py-2 text-sm text-white shadow-sm transition hover:bg-orange-700"
-                                @click="openReopenForm"
+                                :class="ui.ghost"
+                                class="!px-3 !py-1.5 !text-xs"
+                                @click="
+                                    showParticipantForm = !showParticipantForm
+                                "
                             >
-                                Re-Open Ticket
+                                {{ showParticipantForm ? 'Tutup' : '+ Tambah' }}
                             </button>
+                        </div>
 
+                        <form
+                            v-if="showParticipantForm && canManageParticipants"
+                            class="mb-4 space-y-3 rounded-lg border p-4"
+                            @submit.prevent="submitParticipant"
+                        >
+                            <div>
+                                <label :class="ui.label">Staf ticketing</label>
+                                <select
+                                    v-model="participantForm.user_id"
+                                    :class="ui.input"
+                                >
+                                    <option :value="null">Pilih staf</option>
+                                    <option
+                                        v-for="staff in availableParticipants"
+                                        :key="staff.id"
+                                        :value="staff.id"
+                                    >
+                                        {{ staff.name }}
+                                    </option>
+                                </select>
+                                <p
+                                    v-if="participantForm.errors.user_id"
+                                    :class="ui.error"
+                                >
+                                    {{ participantForm.errors.user_id }}
+                                </p>
+                                <p
+                                    v-if="availableParticipants.length === 0"
+                                    class="mt-1"
+                                    :class="ui.muted"
+                                >
+                                    Tidak ada staf ticketing aktif yang
+                                    tersedia.
+                                </p>
+                            </div>
+                            <div>
+                                <label :class="ui.label"
+                                    >Catatan (opsional)</label
+                                >
+                                <textarea
+                                    v-model="participantForm.notes"
+                                    rows="2"
+                                    maxlength="1000"
+                                    placeholder="Contoh: Membantu troubleshooting jaringan."
+                                    :class="ui.input"
+                                ></textarea>
+                                <p
+                                    v-if="participantForm.errors.notes"
+                                    :class="ui.error"
+                                >
+                                    {{ participantForm.errors.notes }}
+                                </p>
+                            </div>
+                            <div class="flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    :class="ui.ghost"
+                                    :disabled="participantForm.processing"
+                                    @click="
+                                        participantForm.reset();
+                                        participantForm.clearErrors();
+                                        showParticipantForm = false;
+                                    "
+                                >
+                                    Batal
+                                </button>
+                                <button
+                                    type="submit"
+                                    :class="ui.primary"
+                                    :disabled="
+                                        participantForm.processing ||
+                                        !participantForm.user_id ||
+                                        availableParticipants.length === 0
+                                    "
+                                >
+                                    {{
+                                        participantForm.processing
+                                            ? 'Menyimpan...'
+                                            : 'Tambah peserta'
+                                    }}
+                                </button>
+                            </div>
+                        </form>
+
+                        <div
+                            v-if="ticket.active_participants?.length"
+                            class="space-y-2"
+                        >
                             <div
-                                v-if="showReopenForm"
-                                class="mt-4 rounded-md border p-4"
+                                v-for="participant in ticket.active_participants"
+                                :key="participant.id"
+                                :class="ui.panel"
+                                class="!px-3 !py-2.5"
                             >
-                                <div class="mb-4 font-medium">
-                                    Re-Open Ticket
+                                <div class="text-sm font-medium">
+                                    {{ participant.user?.name || '-' }}
                                 </div>
-
-                                <div class="space-y-4">
-                                    <div>
-                                        <label
-                                            class="mb-1 block text-sm font-medium"
-                                        >
-                                            Kendala Baru
-                                        </label>
-
-                                        <select
-                                            v-model="reopenForm.kendala_id"
-                                            class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                        >
-                                            <option value="">
-                                                Pilih Kendala
-                                            </option>
-
-                                            <option
-                                                v-for="category in categories"
-                                                :key="category.id"
-                                                :value="category.id"
-                                            >
-                                                {{ category.name }}
-                                            </option>
-                                        </select>
-                                    </div>
-
-                                    <div>
-                                        <label
-                                            class="mb-1 block text-sm font-medium"
-                                        >
-                                            Waktu Gangguan
-                                        </label>
-
-                                        <input
-                                            v-model="reopenForm.reported_at"
-                                            type="datetime-local"
-                                            class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <label
-                                            class="mb-1 block text-sm font-medium"
-                                        >
-                                            Alasan
-                                        </label>
-
-                                        <textarea
-                                            v-model="reopenForm.reason"
-                                            rows="3"
-                                            class="w-full rounded-lg border bg-background px-3 py-2.5 text-sm transition focus:ring-2 focus:ring-ring focus:outline-none"
-                                            placeholder="Jelaskan alasan Re-Open..."
-                                        ></textarea>
-                                    </div>
-
-                                    <div class="flex gap-2">
-                                        <button
-                                            type="button"
-                                            class="rounded-lg border bg-background px-4 py-2 text-sm transition hover:bg-muted"
-                                            @click="showReopenForm = false"
-                                        >
-                                            Batal
-                                        </button>
-
-                                        <button
-                                            type="button"
-                                            class="rounded-lg bg-orange-600 px-4 py-2 text-sm text-white shadow-sm transition hover:bg-orange-700 disabled:opacity-50"
-                                            :disabled="reopenForm.processing"
-                                            @click="submitReopen"
-                                        >
-                                            Re-Open
-                                        </button>
-                                    </div>
+                                <div :class="ui.muted">
+                                    Bergabung
+                                    {{ formatDate(participant.joined_at) }}
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </div>
+                        <p v-else class="text-sm text-muted-foreground">
+                            Belum ada peserta penanganan.
+                        </p>
+                    </section>
+
+                    <section :class="ui.card">
+                        <h2 :class="ui.title" class="mb-4">Informasi tiket</h2>
+                        <dl class="space-y-3 text-sm">
+                            <div class="flex justify-between gap-4">
+                                <dt class="text-muted-foreground">
+                                    Dibuat oleh
+                                </dt>
+                                <dd class="text-right">
+                                    {{ ticket.creator?.name || '-' }}
+                                </dd>
+                            </div>
+                            <div class="flex justify-between gap-4">
+                                <dt class="text-muted-foreground">Dibuat</dt>
+                                <dd class="text-right">
+                                    {{ formatDate(ticket.created_at) }}
+                                </dd>
+                            </div>
+                        </dl>
+                    </section>
+                </aside>
             </div>
         </div>
     </div>

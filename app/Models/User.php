@@ -46,6 +46,8 @@ class User extends Authenticatable implements PasskeyUser
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'two_factor_confirmed_at' => 'datetime',
+            'is_ticketing_staff' => 'boolean',
+
         ];
     }
 
@@ -88,6 +90,40 @@ class User extends Authenticatable implements PasskeyUser
         return $this->hasMany(
             Rfo::class,
             'created_by'
+        );
+    }
+
+
+    /**
+     * Riwayat sebagai PIC tiket.
+     */
+    public function ticketAssignments(): HasMany
+    {
+        return $this->hasMany(
+            TicketAssignment::class,
+            'user_id'
+        );
+    }
+
+    /**
+     * Riwayat sebagai participant tiket.
+     */
+    public function ticketParticipations(): HasMany
+    {
+        return $this->hasMany(
+            TicketParticipant::class,
+            'user_id'
+        );
+    }
+
+    /**
+     * Riwayat evaluasi KPI.
+     */
+    public function kpiEvaluations(): HasMany
+    {
+        return $this->hasMany(
+            KpiEvaluation::class,
+            'user_id'
         );
     }
 }
