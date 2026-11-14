@@ -59,6 +59,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 TicketController::class,
                 'addParticipant',
             ])->name('participants.store');
+            Route::delete(
+                '/{ticket}/participants/{participant}',
+                [TicketController::class, 'removeParticipant']
+            )->name('participants.destroy');
             Route::post('/{ticket}/handover', [
                 TicketController::class,
                 'handover',

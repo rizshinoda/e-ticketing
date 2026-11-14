@@ -310,4 +310,9 @@ class Ticket extends Model
             'ticket_id'
         )->whereNull('left_at');
     }
+
+    public function kpiContributions(): HasMany
+    {
+        return $this->hasMany(TicketKpiContribution::class);
+    }
 }

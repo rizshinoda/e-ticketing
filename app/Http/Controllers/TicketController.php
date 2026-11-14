@@ -17,6 +17,8 @@ use App\Models\Rfo;
 use App\Models\Ticket;
 use App\Models\TicketCategory;
 use App\Models\TicketIncident;
+use App\Models\TicketKpiContribution;
+use App\Models\TicketParticipant;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -1053,8 +1055,11 @@ class TicketController extends Controller
 
         $activeParticipantIds = $ticket->activeParticipants
             ->pluck('user_id')
+            ->unique()
+            ->values()
             ->all();
 
+        // Daftar staf yang belum menjadi participant aktif.
         $availableParticipants = User::query()
             ->where('status', 'active')
             ->where('is_ticketing_staff', true)
@@ -1065,16 +1070,26 @@ class TicketController extends Controller
                 'name',
             ]);
 
-        $canManageParticipants = $ticket->ticket_type === 'gamas'
-            && $ticket->activeAssignment?->user_id === Auth::id()
+        // Pastikan user yang login adalah PIC aktif.
+        $isActivePic = $ticket->activeAssignment?->user_id === Auth::id();
+
+        // Tambah hanya ketika Open atau On Progress.
+        $canAddParticipants = $ticket->ticket_type === 'gamas'
+            && $isActivePic
             && in_array($ticket->status, ['open', 'on_progress']);
+
+        // Remove boleh sampai sebelum Closed.
+        $canRemoveParticipants = $ticket->ticket_type === 'gamas'
+            && $isActivePic
+            && $ticket->status !== 'closed';
         return Inertia::render('Tickets/Show', [
             'ticket' => $ticket,
             'categories' => $categories,
             'availableSites' => $availableSites,
             'ticketingStaff' => $ticketingStaff,
             'availableParticipants' => $availableParticipants,
-            'canManageParticipants' => $canManageParticipants,
+            'canAddParticipants' => $canAddParticipants,
+            'canRemoveParticipants' => $canRemoveParticipants,
             'canHandover' => $canHandover,
         ]);
     }
@@ -1736,49 +1751,122 @@ class TicketController extends Controller
         );
     }
 
+
     public function close(Ticket $ticket)
     {
-        if ($ticket->status !== 'resolved') {
-            return back()->withErrors([
-                'close' => 'Ticket hanya dapat di-Close ketika status Resolved.',
+        $closedTicket = DB::transaction(function () use ($ticket) {
+
+            // Lock tiket agar tidak terjadi proses Close bersamaan.
+            $ticket = Ticket::query()
+                ->whereKey($ticket->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($ticket->status !== 'resolved') {
+                throw ValidationException::withMessages([
+                    'close' => 'Ticket hanya dapat di-Close ketika status Resolved.',
+                ]);
+            }
+
+            $activeStopClock = $ticket->stopClocks()
+                ->whereNull('ended_at')
+                ->exists();
+
+            if ($activeStopClock) {
+                throw ValidationException::withMessages([
+                    'close' => 'Ticket tidak dapat di-Close karena masih ada Stop Clock yang aktif.',
+                ]);
+            }
+
+            if (!$ticket->rfos()->exists()) {
+                throw ValidationException::withMessages([
+                    'close' => 'Ticket tidak dapat di-Close karena belum memiliki RFO.',
+                ]);
+            }
+
+            /*
+         * Tentukan staf yang memperoleh kredit KPI.
+         */
+            if ($ticket->ticket_type === 'individual') {
+
+                // PIC aktif mendapatkan seluruh kredit.
+                $participantIds = $ticket->activeAssignment()
+                    ->pluck('user_id');
+
+                if ($participantIds->isEmpty()) {
+                    throw ValidationException::withMessages([
+                        'close' => 'PIC tiket tidak ditemukan. Kredit KPI tidak dapat dihitung.',
+                    ]);
+                }
+            } else {
+
+                // GAMAS: semua participant yang masih aktif.
+                $participantIds = $ticket->participants()
+                    ->whereNull('left_at')
+                    ->distinct()
+                    ->orderBy('user_id')
+                    ->pluck('user_id');
+            }
+
+            $participantIds = $participantIds->unique()->values();
+
+            $totalParticipants = $participantIds->count();
+
+            if ($totalParticipants > 0) {
+
+                $totalCreditUnits = 1000000;
+
+                $baseCredit = intdiv(
+                    $totalCreditUnits,
+                    $totalParticipants
+                );
+
+                $remainder = $totalCreditUnits % $totalParticipants;
+
+                foreach ($participantIds as $index => $userId) {
+
+                    $creditUnits = $baseCredit
+                        + ($index < $remainder ? 1 : 0);
+
+                    $credit = sprintf(
+                        '%d.%06d',
+                        intdiv($creditUnits, 1000000),
+                        $creditUnits % 1000000
+                    );
+
+                    TicketKpiContribution::create([
+                        'ticket_id' => $ticket->id,
+                        'user_id' => $userId,
+                        'credit' => $credit,
+                    ]);
+                }
+            }
+
+            $closedAt = now();
+
+            // Proses Close asli tetap dipertahankan.
+            $ticket->update([
+                'status' => 'closed',
+                'closed_by' => Auth::id(),
+                'closed_at' => $closedAt,
             ]);
-        }
 
-        $activeStopClock = $ticket->stopClocks()
-            ->whereNull('ended_at')
-            ->exists();
-
-        if ($activeStopClock) {
-            return back()->withErrors([
-                'close' => 'Ticket tidak dapat di-Close karena masih ada Stop Clock yang aktif.',
+            $ticket->updates()->create([
+                'user_id' => Auth::id(),
+                'message' => 'Ticket berhasil di-Close.',
             ]);
-        }
 
-        if (!$ticket->rfos()->exists()) {
-            return back()->withErrors([
-                'close' => 'Ticket tidak dapat di-Close karena belum memiliki RFO.',
-            ]);
-        }
+            return $ticket;
+        });
 
-        $closedAt = now();
+        event(new TicketClosed($closedTicket));
 
-        $ticket->update([
-            'status' => 'closed',
-            'closed_by' => Auth::id(),
-            'closed_at' => $closedAt,
-        ]);
-
-        $ticket->updates()->create([
-            'user_id' => Auth::id(),
-            'message' => 'Ticket berhasil di-Close.',
-        ]);
-
-        event(new TicketClosed($ticket));
         return back()->with(
             'success',
             'Ticket berhasil di-Close.'
         );
     }
+
 
     public function addGamasSite(Request $request, Ticket $ticket)
     {
@@ -3383,6 +3471,60 @@ class TicketController extends Controller
         return back()->with(
             'success',
             'Peserta penanganan berhasil ditambahkan.'
+        );
+    }
+
+    public function removeParticipant(Ticket $ticket, TicketParticipant $participant)
+    {
+        DB::transaction(function () use ($ticket, $participant) {
+
+            // Lock tiket agar tidak berbenturan dengan proses Close.
+            $lockedTicket = Ticket::query()
+                ->whereKey($ticket->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($lockedTicket->ticket_type !== 'gamas') {
+                abort(422, 'Pengelolaan participant hanya tersedia untuk tiket GAMAS.');
+            }
+
+            if ($lockedTicket->status === 'closed') {
+                abort(422, 'Participant tidak dapat dihapus karena tiket sudah Closed.');
+            }
+
+            // Hanya PIC aktif yang boleh menghapus participant.
+            $activeAssignment = $lockedTicket->activeAssignment()
+                ->first();
+
+            if (!$activeAssignment || $activeAssignment->user_id !== Auth::id()) {
+                abort(403, 'Hanya PIC aktif yang dapat menghapus participant.');
+            }
+
+            // Pastikan participant memang milik tiket ini.
+            $participant = TicketParticipant::query()
+                ->whereKey($participant->id)
+                ->where('ticket_id', $lockedTicket->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($participant->left_at !== null) {
+                abort(422, 'Participant tersebut sudah tidak aktif.');
+            }
+
+            // Jangan menghapus PIC yang sedang bertanggung jawab atas tiket.
+            if ($participant->user_id === $activeAssignment->user_id) {
+                abort(422, 'PIC aktif tidak dapat menghapus dirinya sendiri dari participant.');
+            }
+
+            // Soft remove: simpan riwayat participant.
+            $participant->update([
+                'left_at' => now(),
+            ]);
+        });
+
+        return back()->with(
+            'success',
+            'Participant berhasil dihapus dari tiket.'
         );
     }
 }

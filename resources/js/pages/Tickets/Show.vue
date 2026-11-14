@@ -136,6 +136,7 @@ const props = defineProps<{
     canHandover: boolean;
     availableParticipants: User[];
     canManageParticipants: boolean;
+    canRemoveParticipants: boolean;
 }>();
 
 /* ---------- UI helpers (tab & gaya berulang) ---------- */
@@ -308,6 +309,31 @@ const submitParticipant = async () => {
             showErrorToast(
                 'Peserta gagal ditambahkan. Periksa kembali data yang dimasukkan.',
             );
+        },
+    });
+};
+
+const removeParticipant = async (participantId: number) => {
+    const confirmed = await confirmAction({
+        title: 'Hapus Participant?',
+        text: 'Participant ini tidak akan mendapatkan kredit KPI jika tiket di-Close.',
+        icon: 'warning',
+        confirmButtonText: 'Ya, Hapus',
+        cancelButtonText: 'Batal',
+    });
+
+    if (!confirmed) return;
+
+    router.delete(`/tickets/${props.ticket.id}/participants/${participantId}`, {
+        preserveScroll: true,
+
+        onSuccess: () => {
+            showSuccessToast('Participant berhasil dihapus.');
+        },
+
+        onError: (errors) => {
+            console.error('REMOVE PARTICIPANT ERROR:', errors);
+            showErrorToast('Participant gagal dihapus.');
         },
     });
 };
@@ -1100,25 +1126,27 @@ const closeTicket = async () => {
             </header>
 
             <!-- ================= TABS ================= -->
-            <nav class="flex gap-1 overflow-x-auto border-b">
-                <button
-                    v-for="tab in tabs"
-                    :key="tab.key"
-                    type="button"
-                    class="-mb-px flex shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition"
-                    :class="
-                        activeTab === tab.key
-                            ? 'border-primary text-foreground'
-                            : 'border-transparent text-muted-foreground hover:text-foreground'
-                    "
-                    @click="activeTab = tab.key"
-                >
-                    {{ tab.label }}
-                    <span class="rounded-full bg-muted px-2 py-0.5 text-xs">
-                        {{ tab.count }}
-                    </span>
-                </button>
-            </nav>
+            <div class="border-b">
+                <nav class="flex gap-1 overflow-x-auto overflow-y-hidden">
+                    <button
+                        v-for="tab in tabs"
+                        :key="tab.key"
+                        type="button"
+                        class="flex shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition"
+                        :class="
+                            activeTab === tab.key
+                                ? 'border-primary text-foreground'
+                                : 'border-transparent text-muted-foreground hover:text-foreground'
+                        "
+                        @click="activeTab = tab.key"
+                    >
+                        {{ tab.label }}
+                        <span class="rounded-full bg-muted px-2 py-0.5 text-xs">
+                            {{ tab.count }}
+                        </span>
+                    </button>
+                </nav>
+            </div>
 
             <div class="grid gap-6 xl:grid-cols-3">
                 <!-- ================= KOLOM UTAMA ================= -->
@@ -1154,7 +1182,8 @@ const closeTicket = async () => {
                                         !showAddSiteForm
                                     "
                                     type="button"
-                                    :class="ui.primary"
+                                    :class="ui.ghost"
+                                    class="!px-3 !py-1.5 !text-xs"
                                     @click="openAddSiteForm"
                                 >
                                     + Tambah site
@@ -2201,12 +2230,40 @@ const closeTicket = async () => {
                                 :class="ui.panel"
                                 class="!px-3 !py-2.5"
                             >
-                                <div class="text-sm font-medium">
-                                    {{ participant.user?.name || '-' }}
-                                </div>
-                                <div :class="ui.muted">
-                                    Bergabung
-                                    {{ formatDate(participant.joined_at) }}
+                                <div
+                                    class="flex items-center justify-between gap-3"
+                                >
+                                    <div class="min-w-0">
+                                        <div class="text-sm font-medium">
+                                            {{ participant.user?.name || '-' }}
+                                        </div>
+
+                                        <div :class="ui.muted">
+                                            Bergabung
+                                            {{
+                                                formatDate(
+                                                    participant.joined_at,
+                                                )
+                                            }}
+                                        </div>
+                                    </div>
+
+                                    <button
+                                        v-if="
+                                            canRemoveParticipants &&
+                                            participant.user_id !==
+                                                ticket.active_assignment
+                                                    ?.user_id
+                                        "
+                                        type="button"
+                                        :class="ui.ghost"
+                                        class="!px-3 !py-1.5 !text-xs text-red-600 hover:text-red-700"
+                                        @click="
+                                            removeParticipant(participant.id)
+                                        "
+                                    >
+                                        Remove
+                                    </button>
                                 </div>
                             </div>
                         </div>

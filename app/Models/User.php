@@ -126,4 +126,9 @@ class User extends Authenticatable implements PasskeyUser
             'user_id'
         );
     }
+
+    public function ticketKpiContributions(): HasMany
+    {
+        return $this->hasMany(TicketKpiContribution::class);
+    }
 }
