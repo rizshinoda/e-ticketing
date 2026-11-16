@@ -11,6 +11,7 @@ import {
     CalendarDays,
     History,
     FileText,
+    ChartNoAxesCombined,
 } from '@lucide/vue';
 import { computed } from 'vue';
 
@@ -55,6 +56,12 @@ const menuGroups: MenuGroup[] = [
                 title: 'Dashboard',
                 href: dashboard(),
                 icon: LayoutDashboard,
+                exact: true,
+            },
+            {
+                title: 'KPI Saya',
+                href: '/kpi-saya',
+                icon: ChartNoAxesCombined,
                 exact: true,
             },
         ],

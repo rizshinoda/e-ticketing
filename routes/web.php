@@ -2,6 +2,7 @@
 
 use App\Events\TestReverbEvent;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\KpiController;
 use App\Http\Controllers\RestitutionController;
 use App\Http\Controllers\SlaMonthlyReportController;
 use App\Http\Controllers\SlaRuleController;
@@ -234,6 +235,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
         '/reports/ticket-disruptions/export/pdf',
         [TicketDisruptionReportExportController::class, 'downloadPdf']
     )->name('reports.ticket-disruptions.export.pdf');
+
+    Route::get('/kpi-saya', [KpiController::class, 'index'])
+        ->name('kpi.index');
 });
 
 require __DIR__ . '/settings.php';

@@ -135,7 +135,7 @@ const props = defineProps<{
     ticketingStaff: User[];
     canHandover: boolean;
     availableParticipants: User[];
-    canManageParticipants: boolean;
+    canAddParticipants: boolean;
     canRemoveParticipants: boolean;
 }>();
 
@@ -264,10 +264,8 @@ const showParticipantForm = ref(false);
 
 const participantForm = useForm<{
     user_id: number | null;
-    notes: string;
 }>({
     user_id: null,
-    notes: '',
 });
 
 const submitParticipant = async () => {
@@ -2124,7 +2122,7 @@ const closeTicket = async () => {
                         >
                             <h2 :class="ui.title">Peserta penanganan</h2>
                             <button
-                                v-if="canManageParticipants"
+                                v-if="canAddParticipants"
                                 type="button"
                                 :class="ui.ghost"
                                 class="!px-3 !py-1.5 !text-xs"
@@ -2137,7 +2135,7 @@ const closeTicket = async () => {
                         </div>
 
                         <form
-                            v-if="showParticipantForm && canManageParticipants"
+                            v-if="showParticipantForm && canAddParticipants"
                             class="mb-4 space-y-3 rounded-lg border p-4"
                             @submit.prevent="submitParticipant"
                         >
@@ -2171,24 +2169,7 @@ const closeTicket = async () => {
                                     tersedia.
                                 </p>
                             </div>
-                            <div>
-                                <label :class="ui.label"
-                                    >Catatan (opsional)</label
-                                >
-                                <textarea
-                                    v-model="participantForm.notes"
-                                    rows="2"
-                                    maxlength="1000"
-                                    placeholder="Contoh: Membantu troubleshooting jaringan."
-                                    :class="ui.input"
-                                ></textarea>
-                                <p
-                                    v-if="participantForm.errors.notes"
-                                    :class="ui.error"
-                                >
-                                    {{ participantForm.errors.notes }}
-                                </p>
-                            </div>
+
                             <div class="flex justify-end gap-2">
                                 <button
                                     type="button"

@@ -3411,7 +3411,6 @@ class TicketController extends Controller
     {
         $validated = $request->validate([
             'user_id' => ['required', 'integer', 'exists:users,id'],
-            'notes' => ['nullable', 'string', 'max:1000'],
         ]);
 
         DB::transaction(function () use ($ticket, $validated) {
@@ -3464,7 +3463,6 @@ class TicketController extends Controller
                 'user_id' => $participant->id,
                 'added_by' => Auth::id(),
                 'joined_at' => now(),
-                'notes' => $validated['notes'] ?? 'Ditambahkan sebagai peserta penanganan.',
             ]);
         });
 
