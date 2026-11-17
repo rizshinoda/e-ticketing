@@ -1752,6 +1752,7 @@ class TicketController extends Controller
     }
 
 
+
     public function close(Ticket $ticket)
     {
         $closedTicket = DB::transaction(function () use ($ticket) {
@@ -1768,6 +1769,7 @@ class TicketController extends Controller
                 ]);
             }
 
+            // Periksa Stop Clock aktif.
             $activeStopClock = $ticket->stopClocks()
                 ->whereNull('ended_at')
                 ->exists();
@@ -1778,6 +1780,7 @@ class TicketController extends Controller
                 ]);
             }
 
+            // Periksa RFO.
             if (!$ticket->rfos()->exists()) {
                 throw ValidationException::withMessages([
                     'close' => 'Ticket tidak dapat di-Close karena belum memiliki RFO.',
@@ -1785,61 +1788,53 @@ class TicketController extends Controller
             }
 
             /*
-         * Tentukan staf yang memperoleh kredit KPI.
+         * Ambil seluruh participant aktif.
+         * Berlaku untuk Individual maupun GAMAS.
          */
-            if ($ticket->ticket_type === 'individual') {
+            $participantIds = $ticket->participants()
+                ->whereNull('left_at')
+                ->distinct()
+                ->orderBy('user_id')
+                ->pluck('user_id')
+                ->unique()
+                ->values();
 
-                // PIC aktif mendapatkan seluruh kredit.
-                $participantIds = $ticket->activeAssignment()
-                    ->pluck('user_id');
-
-                if ($participantIds->isEmpty()) {
-                    throw ValidationException::withMessages([
-                        'close' => 'PIC tiket tidak ditemukan. Kredit KPI tidak dapat dihitung.',
-                    ]);
-                }
-            } else {
-
-                // GAMAS: semua participant yang masih aktif.
-                $participantIds = $ticket->participants()
-                    ->whereNull('left_at')
-                    ->distinct()
-                    ->orderBy('user_id')
-                    ->pluck('user_id');
+            if ($participantIds->isEmpty()) {
+                throw ValidationException::withMessages([
+                    'close' => 'Tidak ada participant aktif. Kredit KPI tidak dapat dihitung.',
+                ]);
             }
 
-            $participantIds = $participantIds->unique()->values();
-
+            /*
+         * Pembagian kredit KPI.
+         * Total kredit setiap tiket = 1.000000.
+         */
+            $totalCreditUnits = 1000000;
             $totalParticipants = $participantIds->count();
 
-            if ($totalParticipants > 0) {
+            $baseCredit = intdiv(
+                $totalCreditUnits,
+                $totalParticipants
+            );
 
-                $totalCreditUnits = 1000000;
+            $remainder = $totalCreditUnits % $totalParticipants;
 
-                $baseCredit = intdiv(
-                    $totalCreditUnits,
-                    $totalParticipants
+            foreach ($participantIds as $index => $userId) {
+
+                $creditUnits = $baseCredit
+                    + ($index < $remainder ? 1 : 0);
+
+                $credit = sprintf(
+                    '%d.%06d',
+                    intdiv($creditUnits, 1000000),
+                    $creditUnits % 1000000
                 );
 
-                $remainder = $totalCreditUnits % $totalParticipants;
-
-                foreach ($participantIds as $index => $userId) {
-
-                    $creditUnits = $baseCredit
-                        + ($index < $remainder ? 1 : 0);
-
-                    $credit = sprintf(
-                        '%d.%06d',
-                        intdiv($creditUnits, 1000000),
-                        $creditUnits % 1000000
-                    );
-
-                    TicketKpiContribution::create([
-                        'ticket_id' => $ticket->id,
-                        'user_id' => $userId,
-                        'credit' => $credit,
-                    ]);
-                }
+                TicketKpiContribution::create([
+                    'ticket_id' => $ticket->id,
+                    'user_id' => $userId,
+                    'credit' => $credit,
+                ]);
             }
 
             $closedAt = now();
@@ -1859,6 +1854,7 @@ class TicketController extends Controller
             return $ticket;
         });
 
+        // Event dijalankan setelah transaksi berhasil.
         event(new TicketClosed($closedTicket));
 
         return back()->with(

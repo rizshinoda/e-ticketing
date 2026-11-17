@@ -47,21 +47,55 @@ class KpiProductivityService
 
             // Snapshot target dibuat satu kali per periode.
             if ($evaluation->active_staff_count === 0) {
-                $totalIncoming = Ticket::query()
-                    ->whereBetween('created_at', [
-                        $previousStart,
-                        $previousEnd,
-                    ])
-                    ->count();
+
+                // Cari tanggal tiket pertama sejak aplikasi digunakan.
+                $firstTicketDate = Ticket::query()
+                    ->oldest('created_at')
+                    ->value('created_at');
+
+                $totalIncoming = 0;
+                $availableMonths = 0;
+
+                if ($firstTicketDate) {
+                    // Bulan tiket pertama dihitung sebagai satu bulan penuh.
+                    $firstTicketMonth = Carbon::parse($firstTicketDate)
+                        ->startOfMonth();
+
+                    // Tentukan awal periode historis yang tersedia.
+                    $availableStart = $firstTicketMonth->greaterThan($previousStart)
+                        ? $firstTicketMonth->copy()
+                        : $previousStart->copy();
+
+                    // Pastikan bulan pertama tidak melewati akhir periode historis.
+                    if ($availableStart->lte($previousEnd)) {
+                        $availableMonths = (int) $availableStart
+                            ->copy()
+                            ->startOfMonth()
+                            ->diffInMonths(
+                                $previousEnd->copy()->startOfMonth()
+                            ) + 1;
+
+                        // Hitung tiket masuk pada bulan historis yang tersedia.
+                        $totalIncoming = Ticket::query()
+                            ->whereBetween('created_at', [
+                                $availableStart,
+                                $previousEnd,
+                            ])
+                            ->count();
+                    }
+                }
 
                 $activeStaffCount = User::query()
                     ->where('status', 'active')
                     ->where('is_ticketing_staff', true)
                     ->count();
 
-                $averageIncoming = $totalIncoming / 3;
+                // Rata-rata berdasarkan jumlah bulan yang tersedia.
+                $averageIncoming = $availableMonths > 0
+                    ? $totalIncoming / $availableMonths
+                    : 0;
 
-                $target = $activeStaffCount > 0
+                $target = ($availableMonths > 0 && $activeStaffCount > 0)
                     ? $averageIncoming / $activeStaffCount
                     : 0;
 

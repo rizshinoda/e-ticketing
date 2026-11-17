@@ -65,7 +65,7 @@ class KpiController extends Controller
                 'tickets.closed_at',
                 'ticket_kpi_contributions.credit',
             ])
-            ->paginate(10)
+            ->paginate(3)
             ->withQueryString();
         return Inertia::render('Kpi/Index', [
             'user' => [
