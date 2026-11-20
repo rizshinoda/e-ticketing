@@ -138,7 +138,7 @@ class KpiProductivityService
                 [
                     'actual_value' => round((float) $totalCredit, 2),
                     'target_value' => $target,
-                    'weight' => 40,
+                    'weight' => 60,
                     'score' => round($score, 2),
                 ]
             );

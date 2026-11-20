@@ -2,19 +2,20 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\User;
 use App\Services\KpiProductivityService;
+use App\Services\KpiSpeedService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
 
 class KpiController extends Controller
 {
     public function index(
         Request $request,
-        KpiProductivityService $productivityService
+        KpiProductivityService $productivityService,
+        KpiSpeedService $speedService
     ): Response {
         $user = $request->user();
 
@@ -37,13 +38,24 @@ class KpiController extends Controller
             'Periode KPI tidak valid.'
         );
 
+        // Hitung Productivity.
         $evaluation = $productivityService->calculate(
             $user,
             $year,
             $month
         );
+
+        // Hitung Speed.
+        $speed = $speedService->calculate(
+            $user,
+            $year,
+            $month
+        );
+
         $periodStart = Carbon::create($year, $month, 1)->startOfMonth();
         $periodEnd = $periodStart->copy()->endOfMonth();
+
+        // Ambil riwayat kontribusi tiket.
         $contributions = DB::table('ticket_kpi_contributions')
             ->join(
                 'tickets',
@@ -67,23 +79,35 @@ class KpiController extends Controller
             ])
             ->paginate(3)
             ->withQueryString();
+
         return Inertia::render('Kpi/Index', [
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
             ],
+
             'period' => [
                 'year' => $year,
                 'month' => $month,
             ],
+
             'productivity' => [
                 'credit' => (float) $evaluation->details
                     ->firstWhere('indicator_code', 'productivity')
                     ?->actual_value ?? 0,
+
                 'target' => (float) $evaluation->productivity_target,
                 'score' => (float) $evaluation->productivity_score,
-                'weight' => 40,
+                'weight' => 60,
             ],
+
+            'speed' => [
+                'total_seconds' => $speed['total_seconds'],
+                'average_seconds' => $speed['average_seconds'],
+                'average_minutes' => $speed['average_minutes'],
+                'period_count' => $speed['period_count'],
+            ],
+
             'contributions' => $contributions,
         ]);
     }

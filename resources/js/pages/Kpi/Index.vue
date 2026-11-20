@@ -17,6 +17,12 @@ interface Props {
         score: number;
         weight: number;
     };
+    speed: {
+        total_seconds: number;
+        average_seconds: number | null;
+        average_minutes: number | null;
+        period_count: number;
+    };
     contributions: Pagination<Contribution>;
 }
 interface Contribution {
@@ -70,10 +76,37 @@ const formatDate = (value: string) =>
 const formatNumber = (value: number | string) =>
     Number(value).toLocaleString('id-ID', { maximumFractionDigits: 2 });
 
+/* Durasi dalam kata utuh: 90061 detik -> "1 hari 1 jam" */
+const formatDuration = (seconds: number | null) => {
+    if (seconds === null) return '-';
+    if (seconds <= 0) return '0 menit';
+
+    const totalMinutes = Math.round(seconds / 60);
+
+    const days = Math.floor(totalMinutes / 1440);
+    const remainingMinutes = totalMinutes % 1440;
+
+    const hours = Math.floor(remainingMinutes / 60);
+    const minutes = remainingMinutes % 60;
+
+    const parts = [];
+
+    if (days > 0) parts.push(`${days} hari`);
+    if (hours > 0) parts.push(`${hours} jam`);
+    if (minutes > 0) parts.push(`${minutes} menit`);
+
+    return parts.join(' ');
+};
+
 /* ---------- Periode ---------- */
 const selectedPeriod = computed(
     () => `${props.period.year}-${String(props.period.month).padStart(2, '0')}`,
 );
+
+const maxPeriod = computed(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+});
 
 const periodLabel = computed(
     () => `${monthNames[props.period.month - 1]} ${props.period.year}`,
@@ -179,7 +212,15 @@ const ringOffset = computed(
     () => RING_CIRCUMFERENCE * (1 - progress.value / 100),
 );
 
+/* ---------- Speed (informasi saja, tidak masuk nilai KPI) ---------- */
+const speedAvailable = computed(() => props.speed.period_count > 0);
+
 /* ---------- Komposisi bobot KPI (donut) ---------- */
+/* Bobot Quality = sisa dari bobot Productivity, jadi total selalu 100%. */
+const qualityWeight = computed(() =>
+    Math.max(100 - props.productivity.weight, 0),
+);
+
 const kpiComponents = computed(() => [
     {
         key: 'productivity',
@@ -193,19 +234,10 @@ const kpiComponents = computed(() => [
             : null,
     },
     {
-        key: 'speed',
-        name: 'Speed',
-        description: 'Kecepatan penanganan tiket',
-        weight: 30,
-        stroke: 'stroke-sky-500',
-        dot: 'bg-sky-500',
-        value: null,
-    },
-    {
         key: 'quality',
         name: 'Quality',
         description: 'Kualitas penanganan tiket',
-        weight: 30,
+        weight: qualityWeight.value,
         stroke: 'stroke-violet-500',
         dot: 'bg-violet-500',
         value: null,
@@ -253,7 +285,7 @@ function goToPage(url: string | null) {
         <div
             class="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"
         >
-            <div>
+            <div class="pl-6">
                 <h1 class="text-2xl font-semibold tracking-tight">KPI Saya</h1>
                 <p class="mt-1 text-sm text-muted-foreground">
                     Pencapaian {{ user.name }} pada {{ periodLabel }}.
@@ -273,6 +305,7 @@ function goToPage(url: string | null) {
                 <input
                     type="month"
                     :value="selectedPeriod"
+                    :max="maxPeriod"
                     aria-label="Pilih periode"
                     class="h-10 rounded-lg border border-input bg-background px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                     @change="
@@ -406,13 +439,78 @@ function goToPage(url: string | null) {
             </div>
         </section>
 
+        <!-- Speed (informasi saja) -->
+        <section class="rounded-2xl border bg-card p-6">
+            <div
+                class="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"
+            >
+                <div>
+                    <h2 class="font-semibold">Speed</h2>
+                    <p class="mt-1 max-w-xl text-sm text-muted-foreground">
+                        Seberapa lama kamu mengerjakan tiket yang selesai
+                        ditangani pada {{ periodLabel }}.
+                    </p>
+                </div>
+
+                <span
+                    class="w-fit shrink-0 rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground"
+                >
+                    Hanya informasi, tidak memengaruhi nilai KPI
+                </span>
+            </div>
+
+            <template v-if="speedAvailable">
+                <!-- Ringkasan -->
+                <dl class="mt-5 grid gap-3 sm:grid-cols-3">
+                    <div class="rounded-xl bg-muted/60 p-4">
+                        <dt class="text-xs text-muted-foreground">
+                            Rata-rata durasi handle
+                        </dt>
+                        <dd class="mt-1 text-xl font-semibold">
+                            {{ formatDuration(speed.average_seconds) }}
+                        </dd>
+                    </div>
+
+                    <div class="rounded-xl bg-muted/60 p-4">
+                        <dt class="text-xs text-muted-foreground">
+                            Jumlah periode handle
+                        </dt>
+                        <dd class="mt-1 text-xl font-semibold">
+                            {{ speed.period_count }}
+                        </dd>
+                    </div>
+
+                    <div class="rounded-xl bg-muted/60 p-4">
+                        <dt class="text-xs text-muted-foreground">
+                            Total durasi handle
+                        </dt>
+                        <dd class="mt-1 text-xl font-semibold">
+                            {{ formatDuration(speed.total_seconds) }}
+                        </dd>
+                    </div>
+                </dl>
+            </template>
+
+            <!-- Kosong -->
+            <div
+                v-else
+                class="mt-5 rounded-xl border border-dashed p-8 text-center"
+            >
+                <p class="font-medium">Belum ada data Speed</p>
+                <p class="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+                    Data muncul setelah ada tiket yang selesai kamu tangani pada
+                    {{ periodLabel }}.
+                </p>
+            </div>
+        </section>
+
         <!-- Komponen KPI + donut bobot -->
         <section class="rounded-2xl border bg-card p-6">
             <div class="flex flex-col gap-1">
                 <h2 class="font-semibold">Komponen KPI</h2>
                 <p class="text-sm text-muted-foreground">
-                    Nilai akhir KPI terdiri dari tiga komponen. Persentase
-                    menunjukkan bobot tiap komponen.
+                    Nilai akhir KPI terdiri dari dua komponen penilaian.
+                    Persentase menunjukkan bobot tiap komponen.
                 </p>
             </div>
 
